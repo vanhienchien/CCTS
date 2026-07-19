@@ -5,9 +5,6 @@ import json
 import pandas as pd
 import re
 import os
-import yaml
-from yaml.loader import SafeLoader
-import streamlit_authenticator as stauth
 import subprocess
 from datetime import datetime, timezone
 from api_client import CCTSClient
@@ -23,17 +20,6 @@ def install_playwright():
 
 # Gọi hàm này trước khi bắt đầu logic chính của app
 install_playwright()
-
-# 1. Load config đăng nhập
-with open('config.yaml') as file:
-    config = yaml.load(file, Loader=SafeLoader)
-
-authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
-)
 
 # ==========================================
 # ⚙️ 1. CẤU HÌNH TRANG & BẢO MẬT
@@ -297,29 +283,14 @@ def render_map():
         )
 
 def main():
-    # Kiểm tra trạng thái đăng nhập
-    if not st.session_state.get("authentication_status"):
-        authenticator.login()
-        if st.session_state["authentication_status"] is False:
-            st.error('Tên đăng nhập hoặc mật khẩu không chính xác')
-        elif st.session_state["authentication_status"] is None:
-            st.warning('Vui lòng nhập thông tin để tiếp tục.')
-        return
-
     # Nút bấm làm mới
     if st.button("🔄 Cập nhật dữ liệu mới"):
         st.rerun()
 
     # Header
-    col1, col2 = st.columns([6, 1])
-    col1.subheader("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC")
-    with col2:
-        st.caption(f"👤 {st.session_state.get('name', '')}") 
-        if st.button("Đăng xuất"):
-            authenticator.logout()
-            st.rerun()
+    st.subheader("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC")
 
-    # CSS ẩn sidebar
+    # CSS ẩn sidebar (nếu bạn vẫn muốn dùng)
     st.markdown("""
         <style>
             [data-testid="stSidebar"] {display: none;}
