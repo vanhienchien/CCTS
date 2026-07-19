@@ -12,6 +12,7 @@ from folium.plugins import MiniMap
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
 import auth_gsheets as auth
+import traceback
 
 try:
     from streamlit_geolocation import streamlit_geolocation
@@ -704,9 +705,9 @@ def main():
     try:
         auth.init_db()
     except Exception as e:
-        st.error(f"⚠️ Không thể kết nối Google Sheets: {e}")
-        st.info("Kiểm tra lại cấu hình [connections.gsheets] trong Streamlit Secrets.")
-        st.stop()
+        st.error(f"Lỗi: {type(e).__name__}")
+        st.exception(e)
+        st.code(traceback.format_exc())
 
     # Chặn truy cập nếu chưa đăng nhập
     if "auth_user" not in st.session_state:
