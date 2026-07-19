@@ -251,8 +251,9 @@ def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
             <div style="margin-top:3px;">
                 <b>ID:</b> {row["Ticket ID"]}
 
-                &nbsp;&nbsp;
-
+            </div>
+            
+            </div>
                 <b>TT:</b> {row["Ticket Status"]}
             </div>
 
