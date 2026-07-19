@@ -198,7 +198,6 @@ def create_station_popup_html(station_code, tickets_df, tech_name):
     return html_content
 
 def render_map():
-    st.title("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC")
     
     # 1. Nạp dữ liệu
     with st.spinner("Đang đồng bộ dữ liệu tĩnh..."):
@@ -287,9 +286,6 @@ def main():
     if st.button("🔄 Cập nhật dữ liệu mới"):
         st.rerun()
 
-    # Header
-    st.subheader("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC")
-
     # CSS ẩn sidebar (nếu bạn vẫn muốn dùng)
     st.markdown("""
         <style>
@@ -297,7 +293,8 @@ def main():
             .block-container {padding-top: 1rem; padding-bottom: 1rem;}
         </style>
     """, unsafe_allow_html=True)
-    
+    # Header
+    st.subheader("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC ES")
     # Render bản đồ
     render_map()
 
