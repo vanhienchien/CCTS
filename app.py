@@ -11,7 +11,7 @@ import streamlit_authenticator as stauth
 import subprocess
 from datetime import datetime, timezone
 from api_client import CCTSClient
-from utils import extract_core_station_code, parse_duration_to_hours
+from utils import extract_core_station_code  # Đã bỏ parse_duration_to_hours
 
 st.set_page_config(layout="wide", page_title="CCTS Map")
 
@@ -20,6 +20,7 @@ def install_playwright():
         print("Đang tải trình duyệt Playwright, vui lòng đợi trong vài giây...")
         subprocess.run(["playwright", "install", "chromium"])
         print("Tải xong!")
+
 # Gọi hàm này trước khi bắt đầu logic chính của app
 install_playwright()
 
@@ -33,10 +34,10 @@ authenticator = stauth.Authenticate(
     config['cookie']['key'],
     config['cookie']['expiry_days']
 )
+
 # ==========================================
 # ⚙️ 1. CẤU HÌNH TRANG & BẢO MẬT
 # ==========================================
-st.set_page_config(page_title="Charging Station Map", layout="wide")
 
 # Lấy thông tin đăng nhập từ Streamlit Secrets (thiết lập trên Streamlit Cloud)
 try:
@@ -47,15 +48,16 @@ except KeyError:
     st.stop()
 
 # ==========================================
-# 🛠️ 2. MODULE XỬ LÝ DỮ LIỆU TĨNH (JSON)
+# 🛠️ 2. MODULE XỬ LÝ DỮ LIỆU TĨNH
 # ==========================================
 @st.cache_data
 def load_static_data():
-    """Tải và parse file JSON 1 lần duy nhất để tối ưu bộ nhớ"""
+    """Tải và parse file JSON và Excel 1 lần duy nhất để tối ưu bộ nhớ"""
     coords_map = {}
     tech_map = {}
+    region_map = {} # Thêm biến lưu khu vực quản lý
 
-    # 1. Xây dựng dictionary Tọa độ từ station_info.json
+    # 1. Đọc JSON lấy tọa độ (Ưu tiên 1)
     try:
         with open("station_info.json", 'r', encoding='utf-8') as f:
             station_data = json.load(f)
@@ -69,7 +71,27 @@ def load_static_data():
     except Exception as e:
         st.warning(f"Lỗi đọc station_info.json: {e}")
 
-    # 2. Xây dựng dictionary Kỹ thuật viên từ list_Stations.json
+    # 2. Đọc Excel listLongLat.xlsx làm dự phòng (Ưu tiên 2)
+    try:
+        if os.path.exists("listLongLat.xlsx"):
+            df_coords = pd.read_excel("listLongLat.xlsx")
+            # Chuẩn hóa tên cột để tránh lỗi viết hoa/thường
+            col_map = {str(col).strip().lower(): col for col in df_coords.columns}
+            st_col = col_map.get("station code")
+            lat_col = col_map.get("lat")
+            long_col = col_map.get("long")
+            
+            if st_col and lat_col and long_col:
+                df_clean = df_coords.dropna(subset=[st_col, lat_col, long_col])
+                for _, row in df_clean.iterrows():
+                    core_code = extract_core_station_code(row[st_col])
+                    # Chỉ cập nhật nếu trạm chưa có tọa độ từ file JSON
+                    if core_code and core_code not in coords_map:
+                        coords_map[core_code] = {'lat': float(row[lat_col]), 'lng': float(row[long_col])}
+    except Exception as e:
+        st.warning(f"Lỗi đọc listLongLat.xlsx: {e}")
+
+    # 3. Xây dựng dictionary Kỹ thuật viên & Region từ list_Stations.json
     try:
         with open("list_Stations.json", 'r', encoding='utf-8') as f:
             list_stations = json.load(f)
@@ -78,10 +100,11 @@ def load_static_data():
                     for st in stations:
                         core_code = extract_core_station_code(st)
                         tech_map[core_code] = eng
+                        region_map[core_code] = region
     except Exception as e:
         st.warning(f"Lỗi đọc list_Stations.json: {e}")
 
-    return coords_map, tech_map
+    return coords_map, tech_map, region_map
 
 # ==========================================
 # 🔄 3. MODULE FETCH API (CÓ CACHE)
@@ -92,12 +115,8 @@ def fetch_live_tickets():
     Khởi tạo CCTSClient, tự động đăng nhập qua Playwright và gọi trực tiếp endpoint JSON 
     để trích xuất các trường thông tin cần thiết phục vụ bản đồ Live Ticket.
     """
-    # Lấy tài khoản từ st.secrets để đảm bảo tính bảo mật
-    username = st.secrets.get("CCTS_USERNAME", "esmanager")
-    password = st.secrets.get("CCTS_PASSWORD", "Ccts123.")
-    
-    # Khởi tạo client 
-    client = CCTSClient(username=username, password=password)
+    # Sử dụng trực tiếp biến Global đã lấy từ st.secrets ở đầu file
+    client = CCTSClient(username=CCTS_USER, password=CCTS_PASS)
     
     # Thực hiện login lượt đầu tiên để lấy Token và Cookie ssoticket ban đầu
     try:
@@ -161,19 +180,6 @@ def fetch_live_tickets():
 # ==========================================
 # 🎨 4. MODULE RENDER BẢN ĐỒ
 # ==========================================
-def get_marker_color(duration_str):
-    """Phân loại màu Marker dựa trên số giờ SLA"""
-    try:
-        hours = parse_duration_to_hours(duration_str)
-        if hours > 48:
-            return "darkred"
-        elif hours >= 24:
-            return "orange"
-        else:
-            return "green"
-    except:
-        return "gray"
-
 def create_station_popup_html(station_code, tickets_df, tech_name):
     # Loại bỏ max-height và overflow-y ở thẻ div chính
     html_content = f"""
@@ -205,67 +211,12 @@ def create_station_popup_html(station_code, tickets_df, tech_name):
     html_content += "</div>"
     return html_content
 
-@st.cache_data
-def load_static_data():
-    """Tải và parse file JSON và Excel 1 lần duy nhất để tối ưu bộ nhớ"""
-    coords_map = {}
-    tech_map = {}
-    region_map = {} # Thêm biến lưu khu vực quản lý
-
-    # 1. Đọc JSON lấy tọa độ (Ưu tiên 1)
-    try:
-        with open("station_info.json", 'r', encoding='utf-8') as f:
-            station_data = json.load(f)
-            for entry in station_data:
-                store_id = entry.get("store_id")
-                lat = entry.get("lat")
-                lng = entry.get("lng")
-                if store_id and lat and lng:
-                    core_code = extract_core_station_code(store_id)
-                    coords_map[core_code] = {'lat': float(lat), 'lng': float(lng)}
-    except Exception as e:
-        st.warning(f"Lỗi đọc station_info.json: {e}")
-
-    # 2. Đọc Excel listLongLat.xlsx làm dự phòng (Ưu tiên 2)
-    try:
-        if os.path.exists("listLongLat.xlsx"):
-            df_coords = pd.read_excel("listLongLat.xlsx")
-            # Chuẩn hóa tên cột để tránh lỗi viết hoa/thường
-            col_map = {str(col).strip().lower(): col for col in df_coords.columns}
-            st_col = col_map.get("station code")
-            lat_col = col_map.get("lat")
-            long_col = col_map.get("long")
-            
-            if st_col and lat_col and long_col:
-                df_clean = df_coords.dropna(subset=[st_col, lat_col, long_col])
-                for _, row in df_clean.iterrows():
-                    core_code = extract_core_station_code(row[st_col])
-                    # Chỉ cập nhật nếu trạm chưa có tọa độ từ file JSON
-                    if core_code and core_code not in coords_map:
-                        coords_map[core_code] = {'lat': float(row[lat_col]), 'lng': float(row[long_col])}
-    except Exception as e:
-        st.warning(f"Lỗi đọc listLongLat.xlsx: {e}")
-
-    # 3. Xây dựng dictionary Kỹ thuật viên & Region từ list_Stations.json
-    try:
-        with open("list_Stations.json", 'r', encoding='utf-8') as f:
-            list_stations = json.load(f)
-            for region, engs in list_stations.items():
-                for eng, stations in engs.items():
-                    for st in stations:
-                        core_code = extract_core_station_code(st)
-                        tech_map[core_code] = eng
-                        region_map[core_code] = region
-    except Exception as e:
-        st.warning(f"Lỗi đọc list_Stations.json: {e}")
-
-    return coords_map, tech_map, region_map
 def render_map():
     st.title("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC")
     
     # 1. Nạp dữ liệu
     with st.spinner("Đang đồng bộ dữ liệu tĩnh..."):
-        coords_map, tech_map, region_map = load_static_data() # Lấy thêm region_map
+        coords_map, tech_map, region_map = load_static_data() 
         
     with st.spinner("Đang kết nối hệ thống CCTS lấy ticket..."):
         df_tickets = fetch_live_tickets()
@@ -284,6 +235,7 @@ def render_map():
     col2.info("Dữ liệu được làm mới tự động mỗi 5 phút để tối ưu hiệu năng API.")
 
     missing_stations = [] # Danh sách trạm thiếu tọa độ
+    
     # 3. Gắn Markers (Gom nhóm theo trạm)
     grouped = df_tickets.groupby('Station Code')
     
@@ -301,9 +253,8 @@ def render_map():
             lng = coords_map[core_code]['lng']
             tech_name = tech_map.get(core_code, "Unassigned")
             
-            # Tính thời gian lâu nhất trong trạm để đặt màu Marker (cho nổi bật)
-            # Hoặc bạn có thể quy định: Nếu trạm có BSS thì Marker màu khác
-            max_duration = group['Ticket Duration'].apply(parse_duration_to_hours).max()
+            # Ép kiểu dữ liệu duration về numeric để tính max an toàn
+            max_duration = pd.to_numeric(group['Ticket Duration'], errors='coerce').fillna(0).max()
             color = "darkred" if max_duration > 48 else ("orange" if max_duration >= 24 else "green")
             
             # Tạo popup danh sách
@@ -311,19 +262,17 @@ def render_map():
             
             folium.Marker(
                 location=[lat, lng],
-                # height=300 là chiều cao cố định, nếu nội dung dài hơn, nó sẽ chỉ hiện 1 thanh cuộn này
                 popup=folium.Popup(folium.IFrame(html=popup_html, width=300, height=300), max_width=350),
                 icon=folium.Icon(color=color, icon="info-sign")
             ).add_to(m)
         else:
-            # Vẫn thu thập các trạm thiếu tọa độ như cũ
-            # (Lưu ý: Chỉ cần append đại diện 1 dòng của group là đủ)
             first_row = group.iloc[0]
             missing_stations.append({
                 "Station Code": station_code,
                 "Ticket ID": "Multiple",
                 "Problem": "Trạm có nhiều ticket lỗi"
             })
+            
     # 4. Render Bản đồ lên Streamlit
     st_folium(m, width="100%", height=650, returned_objects=[])
 
@@ -346,6 +295,7 @@ def render_map():
             file_name="missing_stations.xlsx",
             mime="application/vnd.ms-excel"
         )
+
 def main():
     # Kiểm tra trạng thái đăng nhập
     if not st.session_state.get("authentication_status"):
@@ -379,5 +329,6 @@ def main():
     
     # Render bản đồ
     render_map()
+
 if __name__ == "__main__":
     main()
