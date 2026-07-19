@@ -167,34 +167,108 @@ def fetch_live_tickets():
 # 🎨 4. MODULE RENDER BẢN ĐỒ
 # ==========================================
 def create_station_popup_html(station_code, tickets_df, tech_name):
-    # Loại bỏ max-height và overflow-y ở thẻ div chính
-    html_content = f"""
-    <div style="font-family: Arial; font-size: 12px; min-width: 260px; padding: 5px;">
-        <h4 style="margin: 0 0 5px 0; color: #1f77b4; font-size: 14px;">Trạm: {station_code}</h4>
-        <div style="margin-bottom: 10px;">
-            <b>Kỹ thuật viên:</b> <span style="color: #2ca02c; font-weight: bold;">{tech_name}</span>
-        </div>
-        <hr style="margin: 5px 0;">
+    """
+    Popup hiển thị các Charge Point trong trạm.
+    Mỗi Charge Point sẽ được tô màu theo thời gian tồn tại ticket.
     """
 
+    html_content = f"""
+    <div style="font-family:Arial;font-size:12px;min-width:280px;padding:5px;">
+        <h4 style="margin:0;color:#1f77b4;">
+            Trạm: {station_code}
+        </h4>
+
+        <div style="margin-top:4px;margin-bottom:6px;">
+            <b>Kỹ thuật viên:</b>
+            <span style="color:#2ca02c;font-weight:bold;">
+                {tech_name}
+            </span>
+        </div>
+
+        <hr style="margin:5px 0;">
+    """
+
+    # Sắp xếp ticket lâu nhất lên đầu
+    tickets_df = tickets_df.copy()
+    tickets_df["Hours"] = tickets_df["Ticket Duration"].apply(parse_duration_to_hours)
+    tickets_df = tickets_df.sort_values("Hours", ascending=False)
+
     for _, row in tickets_df.iterrows():
-        cp_id = str(row['Charge Point ID'])
-        is_bss = cp_id.startswith("BSS")
-        card_bg = "#eef6ff" if is_bss else "#f9f9f9"
-        icon = "🔋 " if is_bss else "⚡ "
-        
+
+        hours = row["Hours"]
+
+        # =====================
+        # Chọn màu theo thời gian
+        # =====================
+
+        if hours >= 48:
+            card_bg = "#ffe5e5"
+            border = "#d62728"
+            time_color = "#b30000"
+
+        elif hours >= 24:
+            card_bg = "#fff2d9"
+            border = "#ff9800"
+            time_color = "#c77700"
+
+        else:
+            card_bg = "#eaf8ea"
+            border = "#2ca02c"
+            time_color = "#2ca02c"
+
+        cp_id = str(row["Charge Point ID"])
+
+        icon = "🔋" if cp_id.startswith("BSS") else "⚡"
+
         html_content += f"""
-        <div style="background-color: {card_bg}; padding: 6px; margin-bottom: 6px; border-radius: 4px; border-left: 3px solid #1f77b4;">
-            <b style="color: #1f77b4; font-size: 11px;">{icon} - {cp_id}</b><br>
-            <div style="font-size: 11px;">
-                <b>ID:</b> {row['Ticket ID']} | <b>TT:</b> {row['Ticket Status']}<br>
-                <b>Thời gian:</b> <span style="color: #d62728; font-weight: bold;">{row['Ticket Duration']}</span><br>
-                <i style="color: #555;">{row['Problem Description']}</i>
+        <div style="
+            background:{card_bg};
+            border-left:5px solid {border};
+            padding:7px;
+            margin-bottom:7px;
+            border-radius:5px;
+        ">
+
+            <div style="
+                color:{border};
+                font-weight:bold;
+                font-size:12px;
+            ">
+                {icon} {cp_id}
             </div>
+
+            <div style="margin-top:3px;">
+                <b>ID:</b> {row["Ticket ID"]}
+
+                &nbsp;&nbsp;
+
+                <b>TT:</b> {row["Ticket Status"]}
+            </div>
+
+            <div>
+                <b>Thời gian:</b>
+
+                <span style="
+                    color:{time_color};
+                    font-weight:bold;
+                ">
+                    {row["Ticket Duration"]}
+                </span>
+            </div>
+
+            <div style="
+                color:#555;
+                margin-top:3px;
+                font-style:italic;
+            ">
+                {row["Problem Description"]}
+            </div>
+
         </div>
         """
 
     html_content += "</div>"
+
     return html_content
 
 def render_map():
@@ -245,10 +319,52 @@ def render_map():
             # Tạo popup danh sách
             popup_html = create_station_popup_html(station_code, group, tech_name)
             
+            # ==========================
+            # Marker hiển thị số lượng Charge Point lỗi
+            # ==========================
+
+            cp_count = len(group)
+
+            color_map = {
+                "green": "#2ca02c",
+                "orange": "#ff9800",
+                "darkred": "#d62728"
+            }
+
+            marker_color = color_map.get(color, "#1f77b4")
+
+            icon_html = f"""
+            <div style="
+                background:{marker_color};
+                color:white;
+                width:34px;
+                height:34px;
+                border-radius:50%;
+                text-align:center;
+                line-height:34px;
+                font-size:15px;
+                font-weight:bold;
+                border:2px solid white;
+                box-shadow:0 2px 6px rgba(0,0,0,0.35);
+            ">
+                {cp_count}
+            </div>
+            """
+
             folium.Marker(
                 location=[lat, lng],
-                popup=folium.Popup(folium.IFrame(html=popup_html, width=300, height=300), max_width=350),
-                icon=folium.Icon(color=color, icon="info-sign")
+
+                popup=folium.Popup(
+                    folium.IFrame(
+                        html=popup_html,
+                        width=330,
+                        height=320
+                    ),
+                    max_width=360
+                ),
+
+                icon=folium.DivIcon(html=icon_html)
+
             ).add_to(m)
         else:
             first_row = group.iloc[0]
