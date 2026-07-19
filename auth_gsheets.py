@@ -49,10 +49,6 @@ ROLE_LABELS = {
 # Kết nối Google Sheets
 # ==========================================
 def _get_conn():
-    import streamlit as st
-
-    st.write("Secrets:", st.secrets["connections"]["gsheets"])
-    st.stop()
     return st.connection("gsheets", type=GSheetsConnection)
 
 
