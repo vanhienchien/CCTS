@@ -13,9 +13,6 @@ from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
 
 st.set_page_config(layout="wide", page_title="CCTS Map")
-# Nút bấm làm mới
-if st.button("🔄 Cập nhật dữ liệu mới"):
-    st.rerun() # Lệnh này bắt buộc Streamlit chạy lại từ đầu để lấy dữ liệu mới
 
 def install_playwright():
     if not os.path.exists("/home/appuser/.cache/ms-playwright"):
