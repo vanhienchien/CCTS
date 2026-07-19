@@ -7,3 +7,5 @@ openpyxl
 xlsxwriter
 streamlit-authenticator
 pyyaml
+st-gsheets-connection
+streamlit-geolocation

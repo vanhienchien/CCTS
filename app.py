@@ -11,6 +11,12 @@ from folium.plugins import Fullscreen, LocateControl
 from folium.plugins import MiniMap
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
+import auth_gsheets as auth
+
+try:
+    from streamlit_geolocation import streamlit_geolocation
+except ImportError:
+    streamlit_geolocation = None
 
 st.set_page_config(
     page_title="CCTS Live Map",
@@ -110,7 +116,7 @@ def load_static_data():
 # ==========================================
 # 🔄 3. MODULE FETCH API (CÓ CACHE)
 # ==========================================
-@st.cache_data(ttl=300) # Làm mới dữ liệu tự động sau mỗi 5 phút
+@st.cache_data(ttl=600) # Làm mới dữ liệu tự động sau mỗi 10 phút
 def fetch_live_tickets():
     """
     Khởi tạo CCTSClient, tự động đăng nhập qua Playwright và gọi trực tiếp endpoint JSON 
@@ -474,6 +480,186 @@ def render_map():
             mime="application/vnd.ms-excel"
         )
 
+# ==========================================
+# 🔐 5. MODULE ĐĂNG NHẬP & PHÂN QUYỀN
+# ==========================================
+def login_page():
+    st.markdown("<h2 style='text-align:center;'>🔐 Đăng nhập hệ thống CCTS</h2>", unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.4, 1])
+    with mid:
+        with st.form("login_form"):
+            username = st.text_input("Tên đăng nhập")
+            password = st.text_input("Mật khẩu", type="password")
+            submitted = st.form_submit_button("Đăng nhập", use_container_width=True)
+
+        if submitted:
+            user = auth.verify_login(username, password)
+            if user:
+                st.session_state["auth_user"] = user
+                st.session_state.pop("last_sent_loc", None)
+                st.rerun()
+            else:
+                st.error("Sai tên đăng nhập hoặc mật khẩu, hoặc tài khoản đã bị khóa.")
+
+
+def render_user_bar(user):
+    """Thanh trạng thái người dùng: thông tin cá nhân, tự động gửi vị trí, đăng xuất.
+    Vị trí được yêu cầu tự động ngay khi vào trang (trình duyệt sẽ tự hiện popup
+    xin quyền định vị - đây là bước bắt buộc theo chính sách bảo mật trình duyệt,
+    không thể bỏ qua)."""
+    top_l, top_m, top_r = st.columns([3, 2, 1])
+
+    with top_l:
+        regions_str = ", ".join(user["regions"]) if user["regions"] else "—"
+        st.markdown(
+            f"👋 **{user['full_name']}** &nbsp;·&nbsp; "
+            f"_{auth.ROLE_LABELS.get(user['role'], user['role'])}_ &nbsp;·&nbsp; "
+            f"Khu vực: {regions_str}"
+        )
+
+    with top_m:
+        if streamlit_geolocation is None:
+            st.caption("⚠️ Thiếu thư viện streamlit-geolocation (xem requirements.txt)")
+        else:
+            loc = streamlit_geolocation()
+            if loc and loc.get("latitude") is not None:
+                current = (round(loc["latitude"], 5), round(loc["longitude"], 5))
+                if current != st.session_state.get("last_sent_loc"):
+                    auth.update_location(
+                        user["username"], loc["latitude"], loc["longitude"], loc.get("accuracy")
+                    )
+                    st.session_state["last_sent_loc"] = current
+                    st.toast("📍 Đã cập nhật vị trí của bạn lên hệ thống")
+
+    with top_r:
+        if st.button("🚪 Đăng xuất", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+
+
+def render_staff_map(user):
+    """Bản đồ vị trí nhân sự - mỗi cấp bậc xem được các cấp thấp hơn mình."""
+    st.subheader("📍 Vị trí nhân sự")
+
+    if st.button("🔄 Làm mới vị trí", key="refresh_staff_map"):
+        st.rerun()
+
+    locations = auth.get_visible_locations(user)
+    if not locations:
+        st.info("Chưa có dữ liệu vị trí nào được ghi nhận.")
+        return
+
+    has_coords = [loc for loc in locations if loc["lat"] is not None and loc["lng"] is not None]
+    no_coords = [loc for loc in locations if loc not in has_coords]
+
+    m = folium.Map(location=[12.25, 108.5], zoom_start=6.3)
+    Fullscreen(position="topright", title="Toàn màn hình", title_cancel="Thoát").add_to(m)
+
+    role_colors = {
+        "ky_thuat": "blue",
+        "dieu_phoi_khu_vuc": "green",
+        "dieu_hanh": "orange",
+        "giam_doc": "purple",
+        "admin": "black",
+    }
+
+    for loc in has_coords:
+        gmap_url = f"https://www.google.com/maps?q={loc['lat']},{loc['lng']}"
+        popup_html = f"""
+        <div style="font-family:Arial;font-size:12px;min-width:200px;">
+            <b>{loc['full_name']}</b><br>
+            {auth.ROLE_LABELS.get(loc['role'], loc['role'])}<br>
+            Khu vực: {loc['regions'] or '—'}<br>
+            <a href="{gmap_url}" target="_blank" rel="noopener noreferrer">Xem trên Google Maps 🗺️</a><br>
+            <span style="color:#888;">Cập nhật lúc: {loc['updated_at'] or 'Chưa có'}</span>
+        </div>
+        """
+        folium.Marker(
+            location=[loc["lat"], loc["lng"]],
+            popup=folium.Popup(popup_html, max_width=260),
+            tooltip=loc["full_name"],
+            icon=folium.Icon(color=role_colors.get(loc["role"], "gray"), icon="user"),
+        ).add_to(m)
+
+    st_folium(m, width="100%", height=600, returned_objects=[], key="staff_location_map")
+
+    if no_coords:
+        st.caption(f"⚠️ {len(no_coords)} người chưa chia sẻ vị trí: " + ", ".join(x["full_name"] for x in no_coords))
+
+
+def render_admin_panel():
+    """Trang quản lý tài khoản - chỉ Admin nhìn thấy."""
+    st.subheader("👤 Quản lý tài khoản")
+
+    existing_users = auth.list_users()
+    usernames = [u["username"] for u in existing_users]
+
+    with st.expander("➕ Tạo mới / Cập nhật tài khoản", expanded=True):
+        edit_target = st.selectbox(
+            "Chọn tài khoản để sửa (hoặc để trống để tạo mới)",
+            options=["-- Tạo tài khoản mới --"] + usernames,
+        )
+        is_edit = edit_target != "-- Tạo tài khoản mới --"
+        current = next((u for u in existing_users if u["username"] == edit_target), None) if is_edit else None
+        role_keys = list(auth.ROLE_LEVELS.keys())
+
+        with st.form("user_form", clear_on_submit=not is_edit):
+            username = st.text_input(
+                "Tên đăng nhập", value=current["username"] if current else "", disabled=is_edit
+            )
+            full_name = st.text_input("Họ và tên", value=current["full_name"] if current else "")
+            role = st.selectbox(
+                "Vai trò",
+                options=role_keys,
+                format_func=lambda r: auth.ROLE_LABELS[r],
+                index=role_keys.index(current["role"]) if current and current["role"] in role_keys else 0,
+            )
+            regions_input = st.text_input(
+                "Khu vực phụ trách (cách nhau bởi dấu phẩy, không bắt buộc — chỉ để hiển thị thông tin, "
+                "không giới hạn phạm vi xem vị trí)",
+                value=current["regions"] if current else "",
+            )
+            password = st.text_input(
+                "Mật khẩu" + (" (để trống nếu không đổi)" if is_edit else ""),
+                type="password",
+            )
+            active = st.checkbox("Tài khoản đang hoạt động", value=bool(current["active"]) if current else True)
+
+            submitted = st.form_submit_button("💾 Lưu tài khoản", use_container_width=True)
+
+        if submitted:
+            regions = [r.strip() for r in regions_input.split(",") if r.strip()]
+            try:
+                action = auth.create_or_update_user(
+                    username=username,
+                    full_name=full_name,
+                    role=role,
+                    regions=regions,
+                    password=password if password else None,
+                    active=active,
+                )
+                st.success(f"Đã {'cập nhật' if action == 'updated' else 'tạo mới'} tài khoản '{username}'.")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+    st.divider()
+    st.markdown("**📋 Danh sách tài khoản hiện có**")
+    if existing_users:
+        df_users = pd.DataFrame(existing_users)
+        df_users["role"] = df_users["role"].map(lambda r: auth.ROLE_LABELS.get(r, r))
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+
+        del_user = st.selectbox("Chọn tài khoản để xoá", options=["--"] + usernames)
+        if del_user != "--":
+            if st.button(f"🗑️ Xoá tài khoản '{del_user}'", type="primary"):
+                auth.delete_user(del_user)
+                st.success(f"Đã xoá tài khoản '{del_user}'.")
+                st.rerun()
+    else:
+        st.info("Chưa có tài khoản nào trong hệ thống.")
+
+
 def main():
 
     st.markdown("""
@@ -514,19 +700,50 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
+    # Khởi tạo Google Sheets (tạo sheet Users/Locations + tài khoản Admin đầu tiên nếu chưa có)
+    try:
+        auth.init_db()
+    except Exception as e:
+        st.error(f"⚠️ Không thể kết nối Google Sheets: {e}")
+        st.info("Kiểm tra lại cấu hình [connections.gsheets] trong Streamlit Secrets.")
+        st.stop()
+
+    # Chặn truy cập nếu chưa đăng nhập
+    if "auth_user" not in st.session_state:
+        login_page()
+        return
+
+    user = st.session_state["auth_user"]
+    render_user_bar(user)
+
     st.title("⚡ CCTS Live Map")
 
-    col1,col2=st.columns([1,1],gap="small")
+    tab_labels = ["🗺️ Bản đồ sự cố"]
+    if user["role"] != "ky_thuat":
+        tab_labels.append("📍 Vị trí nhân sự")
+    if user["role"] == "admin":
+        tab_labels.append("👤 Quản lý tài khoản")
 
-    with col1:
-        if st.button("🔄 Cập nhật dữ liệu",use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
+    tabs = st.tabs(tab_labels)
 
-    with col2:
-        st.caption("Tự động cập nhật mỗi 5 phút")
+    with tabs[0]:
+        col1, col2 = st.columns([1, 1], gap="small")
+        with col1:
+            if st.button("🔄 Cập nhật dữ liệu", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+        with col2:
+            st.caption("Tự động cập nhật mỗi 10 phút")
+        render_map()
 
-    render_map()
+    tab_idx = 1
+    if user["role"] != "ky_thuat":
+        with tabs[tab_idx]:
+            render_staff_map(user)
+        tab_idx += 1
+    if user["role"] == "admin":
+        with tabs[tab_idx]:
+            render_admin_panel()
 
 if __name__ == "__main__":
     main()
