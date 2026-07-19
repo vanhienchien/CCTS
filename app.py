@@ -12,6 +12,16 @@ from yaml.loader import SafeLoader
 # Import các Module tự viết từ dự án gốc của bạn
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
+import subprocess
+
+def install_playwright():
+    if not os.path.exists("/home/appuser/.cache/ms-playwright"):
+        print("Đang tải trình duyệt Playwright, vui lòng đợi trong vài giây...")
+        subprocess.run(["playwright", "install", "chromium"])
+        print("Tải xong!")
+
+# Gọi hàm này trước khi bắt đầu logic chính của app
+install_playwright()
 
 st.set_page_config(layout="wide", page_title="CCTS Map")
 # 1. Load config đăng nhập
