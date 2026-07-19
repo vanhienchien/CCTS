@@ -130,7 +130,7 @@ def fetch_live_tickets():
     
     # Payload bộ lọc tương tự như trích xuất trực tuyến
     payload = {
-        "page": {"pageNum": 1, "pageSize": 100},  # Điều chỉnh kích thước trang nếu lượng ticket lớn
+        "page": {"pageNum": 1, "pageSize": 2000},  # Điều chỉnh kích thước trang nếu lượng ticket lớn
         "timezoneOffset": 420,
         "createStartTime": "2026-04-30 17:00:00",
         "createStopTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
