@@ -485,6 +485,7 @@ def render_map():
 # 🔐 5. MODULE ĐĂNG NHẬP & PHÂN QUYỀN
 # ==========================================
 def login_page():
+    st.markdown("<div style='height:8vh;'></div>", unsafe_allow_html=True)
     st.markdown("<h2 style='text-align:center;'>🔐 Đăng nhập hệ thống CCTS</h2>", unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 1.4, 1])
     with mid:
@@ -501,6 +502,32 @@ def login_page():
                 st.rerun()
             else:
                 st.error("Sai tên đăng nhập hoặc mật khẩu, hoặc tài khoản đã bị khóa.")
+                with st.expander("🔍 Chẩn đoán (không lộ mật khẩu)"):
+                    try:
+                        status = auth.debug_user_status(username)
+                        st.write(f"Tổng số tài khoản trong hệ thống: **{status['total_users']}**")
+                        if not status["found"]:
+                            st.warning(
+                                f"Không tìm thấy tài khoản có tên đăng nhập '{username}'. "
+                                "Kiểm tra lại chính tả, hoặc mở Google Sheet tab 'Users' để xem "
+                                "tên đăng nhập chính xác đang được lưu."
+                            )
+                        elif not status["active"]:
+                            st.warning(
+                                f"Tài khoản '{status['matched_username']}' tồn tại nhưng đang bị khóa "
+                                "(cột 'active' = FALSE trong Google Sheet)."
+                            )
+                        else:
+                            st.warning(
+                                f"Tài khoản '{status['matched_username']}' tồn tại và đang hoạt động, "
+                                "nên nhiều khả năng bạn đã gõ **sai mật khẩu**. Nếu chắc chắn mật khẩu đúng, "
+                                "có thể tài khoản này được tạo (bootstrap) từ một lần chạy trước với mật khẩu "
+                                "khác trong Secrets — hãy xoá dòng tài khoản này (giữ lại dòng tiêu đề) trong "
+                                "tab 'Users' của Google Sheet rồi tải lại trang để hệ thống tạo lại tài khoản "
+                                "Admin theo đúng Secrets hiện tại."
+                            )
+                    except Exception as diag_err:
+                        st.caption(f"Không thể chạy chẩn đoán: {diag_err}")
 
 
 def render_user_bar(user):
@@ -666,9 +693,9 @@ def main():
     st.markdown("""
     <style>
 
-    /* Thu nhỏ khoảng trắng */
+    /* Thu nhỏ khoảng trắng, nhưng chừa đủ chỗ để không bị thanh toolbar của Streamlit che mất */
     .block-container{
-        padding-top:0.5rem;
+        padding-top:3.5rem;
         padding-bottom:0.3rem;
         padding-left:0.6rem;
         padding-right:0.6rem;
@@ -704,10 +731,32 @@ def main():
     # Khởi tạo Google Sheets (tạo sheet Users/Locations + tài khoản Admin đầu tiên nếu chưa có)
     try:
         auth.init_db()
+    except PermissionError as e:
+        sa_email = auth.get_service_account_email()
+        st.error("⚠️ Google từ chối quyền truy cập Google Sheet (403 Forbidden).")
+        if sa_email:
+            st.warning(
+                f"👉 Hãy mở Google Sheet của bạn, bấm **Share**, thêm email sau với quyền **Editor**:\n\n`{sa_email}`"
+            )
+        else:
+            st.warning(
+                "👉 Không đọc được `client_email` từ Secrets. Kiểm tra lại mục "
+                "`[connections.gsheets]` đã điền đủ các trường của Service Account chưa."
+            )
+        st.info(
+            "Ngoài ra, kiểm tra thêm 2 điều sau trong Google Cloud Console (cùng project với Service Account):\n"
+            "- Đã bật **Google Sheets API**\n"
+            "- Đã bật **Google Drive API**"
+        )
+        with st.expander("Chi tiết lỗi kỹ thuật"):
+            st.code(traceback.format_exc())
+        st.stop()
     except Exception as e:
-        st.error(f"Lỗi: {type(e).__name__}")
-        st.exception(e)
-        st.code(traceback.format_exc())
+        st.error(f"⚠️ Không thể kết nối Google Sheets: {type(e).__name__}: {e}")
+        st.info("Kiểm tra lại cấu hình `[connections.gsheets]` trong Streamlit Secrets (spreadsheet URL, service account...).")
+        with st.expander("Chi tiết lỗi kỹ thuật"):
+            st.code(traceback.format_exc())
+        st.stop()
 
     # Chặn truy cập nếu chưa đăng nhập
     if "auth_user" not in st.session_state:

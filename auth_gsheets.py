@@ -52,6 +52,15 @@ def _get_conn():
     return st.connection("gsheets", type=GSheetsConnection)
 
 
+def get_service_account_email():
+    """Trả về email của Service Account (client_email) đang cấu hình trong
+    Secrets, để hiển thị cho người dùng biết cần Share Google Sheet cho email nào."""
+    try:
+        return st.secrets["connections"]["gsheets"].get("client_email")
+    except Exception:
+        return None
+
+
 
 def _hash_password(password, salt=None):
     if salt is None:
@@ -168,6 +177,27 @@ def init_db():
 # ==========================================
 # Xác thực đăng nhập
 # ==========================================
+def debug_user_status(username):
+    """Chỉ dùng để chẩn đoán lỗi đăng nhập: cho biết tài khoản có tồn tại,
+    có đang hoạt động không, KHÔNG tiết lộ mật khẩu/hash."""
+    df = _read_users_df()
+    total = len(df)
+    username = (username or "").strip()
+    if df.empty or not username:
+        return {"total_users": total, "found": False}
+    match = df[df["username"].str.lower() == username.lower()]
+    if match.empty:
+        return {"total_users": total, "found": False}
+    row = match.iloc[0]
+    return {
+        "total_users": total,
+        "found": True,
+        "matched_username": row["username"],
+        "active": bool(row["active"]),
+        "role": row["role"],
+    }
+
+
 def verify_login(username, password):
     username = (username or "").strip()
     if not username or not password:
