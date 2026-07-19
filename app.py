@@ -11,7 +11,7 @@ import streamlit_authenticator as stauth
 import subprocess
 from datetime import datetime, timezone
 from api_client import CCTSClient
-from utils import extract_core_station_code  # Đã bỏ parse_duration_to_hours
+from utils import extract_core_station_code, parse_duration_to_hours
 
 st.set_page_config(layout="wide", page_title="CCTS Map")
 
@@ -253,8 +253,8 @@ def render_map():
             lng = coords_map[core_code]['lng']
             tech_name = tech_map.get(core_code, "Unassigned")
             
-            # Ép kiểu dữ liệu duration về numeric để tính max an toàn
-            max_duration = pd.to_numeric(group['Ticket Duration'], errors='coerce').fillna(0).max()
+            # Dùng lại apply(parse_duration_to_hours) để chuyển chuỗi thành số giờ
+            max_duration = group['Ticket Duration'].apply(parse_duration_to_hours).max()
             color = "darkred" if max_duration > 48 else ("orange" if max_duration >= 24 else "green")
             
             # Tạo popup danh sách
