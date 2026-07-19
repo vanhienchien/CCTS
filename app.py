@@ -48,7 +48,7 @@ def load_static_data():
     coords_map = {}
     tech_map = {}
     region_map = {} # Thêm biến lưu khu vực quản lý
-
+    cp_model_map = {} # Biến mới để lưu map model
     # 1. Đọc JSON lấy tọa độ (Ưu tiên 1)
     try:
         with open("station_info.json", 'r', encoding='utf-8') as f:
@@ -96,7 +96,16 @@ def load_static_data():
     except Exception as e:
         st.warning(f"Lỗi đọc list_Stations.json: {e}")
 
-    return coords_map, tech_map, region_map
+    try:
+        if os.path.exists("ChargePoint_Model.xlsx"):
+            df_model = pd.read_excel("ChargePoint_Model.xlsx")
+            # Tạo dictionary mapping: Model -> Name
+            cp_model_map = dict(zip(df_model["Charge Point Model"], df_model["Name"]))
+    except Exception as e:
+        st.warning(f"Lỗi đọc ChargePoint_Model.xlsx: {e}")
+
+    # Cập nhật return
+    return coords_map, tech_map, region_map, cp_model_map
 
 # ==========================================
 # 🔄 3. MODULE FETCH API (CÓ CACHE)
@@ -147,10 +156,10 @@ def fetch_live_tickets():
 
         # Vòng lặp lấy đúng các thông tin cần thiết từ đối tượng JSON
         for item in tickets:
-            # Ánh xạ trực tiếp từ cấu trúc JSON sang định dạng cột mong muốn
             processed_data.append({
                 "Ticket ID": item.get("cctsTicketId"),
                 "Charge Point ID": item.get("chargeBoxId"),
+                "Charge Box Model": item.get("chargeBoxModel"),
                 "Station Code": item.get("stationCode"),
                 "Problem Description": item.get("errorDesc"),
                 "Ticket Status": item.get("cctsTicketStatus"),
@@ -208,10 +217,7 @@ def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
 
         hours = row["Hours"]
 
-        # =====================
         # Chọn màu theo thời gian
-        # =====================
-
         if hours >= 48:
             card_bg = "#ffe5e5"
             border = "#d62728"
@@ -228,7 +234,7 @@ def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
             time_color = "#2ca02c"
 
         cp_id = str(row["Charge Point ID"])
-
+        model_name = row["Model Name"] # Lấy thông tin model đã map
         icon = "🔋" if cp_id.startswith("BSS") else "⚡"
 
         html_content += f"""
@@ -239,30 +245,23 @@ def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
             margin-bottom:7px;
             border-radius:5px;
         ">
-
             <div style="
                 color:{border};
                 font-weight:bold;
                 font-size:12px;
             ">
-                {icon} {cp_id}
+                {icon} {cp_id} 
+                <span style="font-weight:normal; font-size:10px; color:#555;">({model_name})</span>
             </div>
 
-            <div style="margin-top:3px;">
-                <b>ID:</b> {row["Ticket ID"]}
-
-                &nbsp;&nbsp;
-
-                <b>TT:</b> {row["Ticket Status"]}
+            <div style="margin-top:3px; line-height:1.4;">
+                <b>Ticket ID:</b> {row["Ticket ID"]} <br>
+                <b>Ticket Status:</b> {row["Ticket Status"]}
             </div>
 
             <div>
                 <b>Thời gian:</b>
-
-                <span style="
-                    color:{time_color};
-                    font-weight:bold;
-                ">
+                <span style="color:{time_color}; font-weight:bold;">
                     {row["Ticket Duration"]}
                 </span>
             </div>
@@ -274,7 +273,6 @@ def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
             ">
                 {row["Problem Description"]}
             </div>
-
         </div>
         """
 
@@ -350,9 +348,9 @@ def create_station_marker(cp_count, color):
     )
 def render_map():
     
-    # 1. Nạp dữ liệu
+    # 1. Nạp dữ liệu (cập nhật cách gọi hàm)
     with st.spinner("Đang đồng bộ dữ liệu tĩnh..."):
-        coords_map, tech_map, region_map = load_static_data() 
+        coords_map, tech_map, region_map, cp_model_map = load_static_data() 
         
     with st.spinner("Đang kết nối hệ thống CCTS lấy ticket..."):
         df_tickets = fetch_live_tickets()
@@ -360,6 +358,9 @@ def render_map():
     if df_tickets.empty:
         st.info("Hiện không có ticket sự cố nào đang mở.")
         return
+
+    # Map thông tin model vào DataFrame
+    df_tickets["Model Name"] = df_tickets["Charge Box Model"].map(cp_model_map).fillna("N/A")
 
     # Tính Hours 1 lần duy nhất cho toàn bộ dataframe (tránh tính lại nhiều lần cho mỗi trạm)
     df_tickets = df_tickets.copy()
