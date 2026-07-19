@@ -276,9 +276,9 @@ def create_station_marker(cp_count, color):
     """
 
     color_map = {
-        "green": "#28a745",
-        "orange": "#ff9800",
-        "darkred": "#d62728"
+        "green": "#6ECC39",
+        "orange": "#F5A623",
+        "darkred": "#B52B31"
     }
 
     marker_color = color_map.get(color, "#007bff")
