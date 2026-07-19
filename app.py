@@ -9,6 +9,7 @@ import yaml
 from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 import subprocess
+from datetime import datetime, timezone
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
 
@@ -85,40 +86,76 @@ def load_static_data():
 # ==========================================
 # 🔄 3. MODULE FETCH API (CÓ CACHE)
 # ==========================================
-@st.cache_data(ttl=300) # Làm mới dữ liệu tự động sau mỗi 5 phút
+@st.cache_data(ttl=600) # Làm mới dữ liệu tự động sau mỗi 5 phút
 def fetch_live_tickets():
-    """Gọi CCTS API để lấy payload trực tiếp"""
-    client = CCTSClient(username=CCTS_USER, password=CCTS_PASS)
+    """
+    Khởi tạo CCTSClient, tự động đăng nhập qua Playwright và gọi trực tiếp endpoint JSON 
+    để trích xuất các trường thông tin cần thiết phục vụ bản đồ Live Ticket.
+    """
+    # Lấy tài khoản từ st.secrets để đảm bảo tính bảo mật
+    username = st.secrets.get("CCTS_USERNAME", "esmanager")
+    password = st.secrets.get("CCTS_PASSWORD", "Ccts123.")
+    
+    # Khởi tạo client 
+    client = CCTSClient(username=username, password=password)
+    
+    # Thực hiện login lượt đầu tiên để lấy Token và Cookie ssoticket ban đầu
     try:
         client.login()
-        # Lấy dữ liệu mở với các status mục tiêu như trong auto_ccts.py
-        target_statuses = ["Open", "Appointment", "Pending for spare parts", "Pending for ASP close"]
-        dfs = client.export_and_download_tickets(
-            start_time="2026-05-01 00:00:00",
-            end_time=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-            ticket_status=target_statuses
-        )
+    except Exception as e:
+        st.error(f"Khởi động phiên đăng nhập CCTS thất bại: {e}")
+        return pd.DataFrame()
 
-        if not dfs or "Ticket Information" not in dfs:
+    # Endpoint tìm kiếm/truy vấn danh sách ticket trực tiếp
+    endpoint = "/ccts/cctsTicket/findCCTSTicket"
+    
+    # Payload bộ lọc tương tự như trích xuất trực tuyến
+    payload = {
+        "page": {"pageNum": 1, "pageSize": 100},  # Điều chỉnh kích thước trang nếu lượng ticket lớn
+        "timezoneOffset": 420,
+        "createStartTime": "2026-04-30 17:00:00",
+        "createStopTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ticketStatus": ["Open", "Appointment", "Pending for ASP close", "Pending for spare parts"]
+    }
+
+    try:
+        # Gọi API qua hàm _post nội bộ. Hàm này tự bắt mã 401/403/50001 để tự động 
+        # gọi lại Playwright gia hạn token nếu hết hạn giữa chừng.
+        res_data = client._post(endpoint, payload)
+        
+        # Bóc tách danh sách từ cấu trúc JSON phản hồi
+        data = res_data.get("data", {})
+        tickets = data.get("list", []) if isinstance(data, dict) else data
+        if not isinstance(tickets, list):
+            tickets = data.get("records", [])
+
+        if not tickets:
             return pd.DataFrame()
 
-        df = dfs["Ticket Information"].copy()
+        processed_data = []
+
+        # Vòng lặp lấy đúng các thông tin cần thiết từ đối tượng JSON
+        for item in tickets:
+            # Ánh xạ trực tiếp từ cấu trúc JSON sang định dạng cột mong muốn
+            processed_data.append({
+                "Ticket ID": item.get("cctsTicketId"),
+                "Charge Point ID": item.get("chargeBoxId"),
+                "Station Code": item.get("stationCode"),
+                "Problem Description": item.get("errorDesc"),
+                "Ticket Status": item.get("cctsTicketStatus"),
+                "Ticket Duration": item.get("duration")
+            })
+
+        df = pd.DataFrame(processed_data)
         
-        # Lọc bỏ các mô tả lỗi bắt đầu bằng "BSS.No2" theo logic cũ
+        # Lọc bỏ nhiễu từ các trạm thử nghiệm BSS.No2 giống logic cũ
         if "Problem Description" in df.columns:
             df = df[~df["Problem Description"].astype(str).str.strip().str.startswith("BSS.No2")].copy()
-        
-        # Chỉ giữ lại các cột cần thiết cho payload
-        cols_needed = ["Ticket ID", "Ticket Status", "Station Code", "Charge Point ID", "Ticket Duration", "Problem Description"]
-        # Đảm bảo các cột tồn tại để tránh lỗi KeyError
-        for col in cols_needed:
-            if col not in df.columns:
-                df[col] = ""
-                
-        return df[cols_needed].drop_duplicates(subset=["Ticket ID"])
+            
+        return df
 
     except Exception as e:
-        st.error(f"Lỗi khi gọi API CCTS: {e}")
+        st.error(f"Gặp lỗi khi xử lý luồng dữ liệu API: {e}")
         return pd.DataFrame()
 
 # ==========================================
