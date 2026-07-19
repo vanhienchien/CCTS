@@ -335,25 +335,52 @@ def render_map():
 
             icon_html = f"""
             <div style="
-                background:{marker_color};
-                color:white;
-                width:34px;
-                height:34px;
-                border-radius:50%;
-                text-align:center;
-                line-height:34px;
-                font-size:15px;
-                font-weight:bold;
-                border:2px solid white;
-                box-shadow:0 2px 6px rgba(0,0,0,0.35);
+                position: relative;
+                width: 42px;
+                height: 54px;
             ">
-                {cp_count}
+
+                <!-- Phần đầu hình tròn -->
+                <div style="
+                    position:absolute;
+                    top:0;
+                    left:0;
+                    width:42px;
+                    height:42px;
+                    background:{marker_color};
+                    border-radius:50%;
+                    border:3px solid white;
+                    box-shadow:0 3px 8px rgba(0,0,0,.35);
+                    color:white;
+                    font-size:16px;
+                    font-weight:bold;
+                    text-align:center;
+                    line-height:42px;
+                    z-index:2;
+                ">
+                    {cp_count}
+                </div>
+
+                <!-- Mũi nhọn -->
+                <div style="
+                    position:absolute;
+                    left:14px;
+                    top:28px;
+                    width:14px;
+                    height:14px;
+                    background:{marker_color};
+                    transform:rotate(45deg);
+                    border-right:3px solid white;
+                    border-bottom:3px solid white;
+                    z-index:1;
+                ">
+                </div>
+
             </div>
             """
 
             folium.Marker(
                 location=[lat, lng],
-
                 popup=folium.Popup(
                     folium.IFrame(
                         html=popup_html,
@@ -362,9 +389,11 @@ def render_map():
                     ),
                     max_width=360
                 ),
-
-                icon=folium.DivIcon(html=icon_html)
-
+                icon=folium.DivIcon(
+                    html=icon_html,
+                    icon_size=(42, 54),
+                    icon_anchor=(21, 54)
+                )
             ).add_to(m)
         else:
             first_row = group.iloc[0]
