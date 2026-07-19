@@ -195,7 +195,7 @@ def create_station_popup_html(station_code, tickets_df, tech_name):
         cp_id = str(row['Charge Point ID'])
         is_bss = cp_id.startswith("BSS")
         card_bg = "#eef6ff" if is_bss else "#f9f9f9"
-        icon = "🔋 BSS" if is_bss else "⚡ Sạc"
+        icon = "🔋 " if is_bss else "⚡ "
         
         html_content += f"""
         <div style="background-color: {card_bg}; padding: 6px; margin-bottom: 6px; border-radius: 4px; border-left: 3px solid #1f77b4;">
