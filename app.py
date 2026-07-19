@@ -7,6 +7,8 @@ import re
 import os
 import subprocess
 from datetime import datetime, timezone
+from folium.plugins import Fullscreen, LocateControl
+from folium.plugins import MiniMap
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
 
@@ -276,9 +278,9 @@ def create_station_marker(cp_count, color):
     """
 
     color_map = {
-        "green": "#6ECC39",
-        "orange": "#F5A623",
-        "darkred": "#B52B31"
+        "green": "#5AB923",
+        "orange": "#D38A14",
+        "darkred": "#992127"
     }
 
     marker_color = color_map.get(color, "#007bff")
@@ -351,8 +353,12 @@ def render_map():
         return
     
     # 2. Xử lý logic Map
-    m = folium.Map(location=[12.25, 108.5], zoom_start=6) 
-    
+    m = folium.Map(location=[12.25, 108.5], zoom_start=6.3) 
+    Fullscreen(
+        position="topright",
+        title="Toàn màn hình",
+        title_cancel="Thoát"
+    ).add_to(m)
     total_tickets = len(df_tickets)
     
     col1, col2 = st.columns(2)
@@ -392,21 +398,20 @@ def render_map():
             cp_count = len(group)
 
             folium.Marker(
-
-                location=[lat,lng],
+                location=[lat, lng],
 
                 popup=folium.Popup(
                     folium.IFrame(
                         html=popup_html,
-                        width=330,
+                        width=300,
                         height=320
                     ),
-                    max_width=360
+                    max_width=300
                 ),
 
-                icon=create_station_marker(
-                    cp_count,
-                    color
+                icon=folium.Icon(
+                    color=color,
+                    icon="info-sign"
                 )
 
             ).add_to(m)
@@ -418,8 +423,21 @@ def render_map():
             })
             
     # 4. Render Bản đồ lên Streamlit
-    st_folium(m, width="100%", height=650, returned_objects=[])
-
+    st_folium(
+        m,
+        width="100%",
+        height=700,
+        returned_objects=[]
+    )
+    LocateControl(
+        auto_start=False,
+        flyTo=True,
+        keepCurrentZoomLevel=True
+    ).add_to(m)
+    MiniMap(
+        toggle_display=True,
+        position="bottomright"
+    ).add_to(m)
     # 5. Hiển thị nút tải file trạm thiếu (nếu có)
     if missing_stations:
         st.divider()
@@ -441,20 +459,63 @@ def render_map():
         )
 
 def main():
-    # Nút bấm làm mới
-    if st.button("🔄 Cập nhật dữ liệu mới"):
-        st.rerun()
 
-    # CSS ẩn sidebar (nếu bạn vẫn muốn dùng)
+    st.set_page_config(
+        page_title="CCTS Live Map",
+        layout="wide",
+        initial_sidebar_state="collapsed"
+    )
+
     st.markdown("""
-        <style>
-            [data-testid="stSidebar"] {display: none;}
-            .block-container {padding-top: 1rem; padding-bottom: 1rem;}
-        </style>
+    <style>
+
+    /* Thu nhỏ khoảng trắng */
+    .block-container{
+        padding-top:0.5rem;
+        padding-bottom:0.3rem;
+        padding-left:0.6rem;
+        padding-right:0.6rem;
+    }
+
+    /* Ẩn Sidebar */
+    [data-testid="stSidebar"]{
+        display:none;
+    }
+
+    /* Mobile */
+    @media (max-width:768px){
+
+        h3{
+            font-size:22px !important;
+        }
+
+        button[kind="primary"]{
+            width:100%;
+            height:48px;
+            font-size:18px;
+        }
+
+        [data-testid="stMetric"]{
+            text-align:center;
+        }
+
+    }
+
+    </style>
     """, unsafe_allow_html=True)
-    # Header
-    st.subheader("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC ES")
-    # Render bản đồ
+
+    st.title("⚡ CCTS Live Map")
+
+    col1,col2=st.columns([1,1],gap="small")
+
+    with col1:
+        if st.button("🔄 Cập nhật dữ liệu",use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    with col2:
+        st.caption("Tự động cập nhật mỗi 5 phút")
+
     render_map()
 
 if __name__ == "__main__":
