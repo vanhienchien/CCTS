@@ -251,12 +251,12 @@ def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
                 font-size:12px;
             ">
                 {icon} {cp_id} 
-                <span style="font-weight:normal; font-size:10px; color:#555;">({model_name})</span>
+                <span style="margin-top:3px; color:#555;">{model_name}</span>
             </div>
 
             <div style="margin-top:3px; line-height:1.4;">
-                <b>Ticket ID:</b> {row["Ticket ID"]} <br>
                 <b>Ticket Status:</b> {row["Ticket Status"]}
+                <b>Ticket ID:</b> {row["Ticket ID"]} <br>
             </div>
 
             <div>
