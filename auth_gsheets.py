@@ -89,6 +89,21 @@ def _hash_password(password, salt=None):
     return pwd_hash.hex(), salt
 
 
+def _parse_bool(value):
+    """Chuyển 1 giá trị đọc từ Google Sheet thành bool, một cách chắc chắn.
+    gspread_dataframe.get_as_dataframe() có hành vi đã biết: ô Boolean
+    TRUE/FALSE trong Sheet bị đọc về thành SỐ THỰC 1.0/0.0 (không phải chuỗi
+    "TRUE"/"FALSE"), nên phải xử lý cả 2 dạng số và chuỗi ở đây."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return False
+        return value != 0
+    text = str(value).strip().upper()
+    return text in ("TRUE", "1", "1.0", "YES", "ACTIVE")
+
+
 # ==========================================
 # Đọc / Ghi dữ liệu (luôn đọc bản mới nhất, ttl=0 - không cache)
 # ==========================================
@@ -112,9 +127,7 @@ def _read_users_df():
             df[col] = True if col == "active" else ""
 
     df["username"] = df["username"].astype(str).str.strip()
-    df["active"] = (
-        df["active"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "YES", "ACTIVE"])
-    )
+    df["active"] = df["active"].apply(_parse_bool)
     return df[USERS_COLUMNS].reset_index(drop=True)
 
 
