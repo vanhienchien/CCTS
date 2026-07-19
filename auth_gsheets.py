@@ -15,6 +15,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 USERS_SHEET = "Users"
 LOCATIONS_SHEET = "Locations"
@@ -61,6 +62,23 @@ def get_service_account_email():
         return None
 
 
+def _get_worksheet(name, create_if_missing=True, rows=100, cols=len(USERS_COLUMNS) + 2):
+    """Lấy trực tiếp đối tượng Worksheet của gspread, KHÔNG đi qua lớp cache
+    của conn.read()/conn.update() (thư viện st-gsheets-connection cache nội bộ
+    bằng st.cache_data, và ttl=0 không thực sự tắt cache trong thư viện này -
+    dẫn đến đọc phải dữ liệu cũ). Việc lấy Worksheet trực tiếp đảm bảo dữ liệu
+    xác thực luôn là mới nhất."""
+    conn = _get_conn()
+    client = conn.client  # GSheetsServiceAccountClient (đã xác thực qua secrets)
+    try:
+        return client._select_worksheet(worksheet=name)
+    except Exception:
+        if not create_if_missing:
+            raise
+        spreadsheet = client._open_spreadsheet(spreadsheet=client._spreadsheet, folder_id=client._worksheet)
+        return spreadsheet.add_worksheet(title=name, rows=rows, cols=cols)
+
+
 
 def _hash_password(password, salt=None):
     if salt is None:
@@ -75,9 +93,9 @@ def _hash_password(password, salt=None):
 # Đọc / Ghi dữ liệu (luôn đọc bản mới nhất, ttl=0 - không cache)
 # ==========================================
 def _read_users_df():
-    conn = _get_conn()
     try:
-        df = conn.read(worksheet=USERS_SHEET, ttl=0)
+        ws = _get_worksheet(USERS_SHEET)
+        df = get_as_dataframe(ws, evaluate_formulas=True)
     except Exception:
         return pd.DataFrame(columns=USERS_COLUMNS)
 
@@ -101,18 +119,16 @@ def _read_users_df():
 
 
 def _write_users_df(df):
-    conn = _get_conn()
+    ws = _get_worksheet(USERS_SHEET)
     df = df[USERS_COLUMNS].copy()
-    conn.update(
-        worksheet=USERS_SHEET,
-        data=df,
-    )
+    ws.clear()
+    set_with_dataframe(ws, df, include_column_header=True)
 
 
 def _read_locations_df():
-    conn = _get_conn()
     try:
-        df = conn.read(worksheet=LOCATIONS_SHEET, ttl=0)
+        ws = _get_worksheet(LOCATIONS_SHEET)
+        df = get_as_dataframe(ws, evaluate_formulas=True)
     except Exception:
         return pd.DataFrame(columns=LOCATIONS_COLUMNS)
 
@@ -136,12 +152,10 @@ def _read_locations_df():
 
 
 def _write_locations_df(df):
-    conn = _get_conn()
+    ws = _get_worksheet(LOCATIONS_SHEET, cols=len(LOCATIONS_COLUMNS) + 2)
     df = df[LOCATIONS_COLUMNS].copy()
-    conn.update(
-        worksheet=LOCATIONS_SHEET,
-        data=df,
-    )
+    ws.clear()
+    set_with_dataframe(ws, df, include_column_header=True)
 
 # ==========================================
 # Khởi tạo lần đầu (bootstrap tài khoản Admin)
