@@ -1,0 +1,11 @@
+# Các file chứa thông tin nhạy cảm (KHÔNG ĐƯỢC ĐẨY LÊN)
+.streamlit/secrets.toml
+.env
+
+# Các file hệ thống và cache
+__pycache__/
+*.pyc
+.DS_Store
+
+# Nếu bạn có các file log hoặc file tạm
+*.log

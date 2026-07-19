@@ -1,0 +1,15 @@
+# config.yaml
+credentials:
+  usernames:
+    ktv1:
+      email: ktv1@congty.com
+      name: Kỹ thuật viên 1
+      password: "$2b$12$c.udUlfrXzpJK8Ao7aKASOyvD7NGwMo0UcEKIGF4dHkouymOU.vK2"
+    ktv2:
+      email: ktv2@congty.com
+      name: Kỹ thuật viên 2
+      password: "$2b$12$cyRUUNhIRmyZAEXdXMGOT.pm9dqXSwvbT1gIvR71/U5VL06OSVl2q"
+cookie:
+  name: "ccts_map_cookie"
+  key: "random_key_123"
+  expiry_days: 30

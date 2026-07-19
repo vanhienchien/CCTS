@@ -1,0 +1,9 @@
+streamlit
+folium
+streamlit-folium
+pandas
+playwright
+openpyxl
+xlsxwriter
+streamlit-authenticator
+pyyaml
