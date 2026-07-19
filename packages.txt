@@ -9,3 +9,9 @@ libxdamage1
 libxrandr2
 libatk1.0-0
 libatk-bridge2.0-0
+libxfixes3
+libx11-xcb1
+libxcb-dri3-0
+libx11-6
+libxkbcommon0
+libgtk-3-0
