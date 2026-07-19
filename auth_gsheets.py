@@ -93,12 +93,10 @@ def _read_users_df():
 def _write_users_df(df):
     conn = _get_conn()
     df = df[USERS_COLUMNS].copy()
-    try:
-        result = conn.update(worksheet=USERS_SHEET, data=df)
-        if result is None:
-            conn.create(worksheet=USERS_SHEET, data=df)
-    except Exception:
-        conn.create(worksheet=USERS_SHEET, data=df)
+    conn.update(
+        worksheet=USERS_SHEET,
+        data=df,
+    )
 
 
 def _read_locations_df():
@@ -130,13 +128,10 @@ def _read_locations_df():
 def _write_locations_df(df):
     conn = _get_conn()
     df = df[LOCATIONS_COLUMNS].copy()
-    try:
-        result = conn.update(worksheet=LOCATIONS_SHEET, data=df)
-        if result is None:
-            conn.create(worksheet=LOCATIONS_SHEET, data=df)
-    except Exception:
-        conn.create(worksheet=LOCATIONS_SHEET, data=df)
-
+    conn.update(
+        worksheet=LOCATIONS_SHEET,
+        data=df,
+    )
 
 # ==========================================
 # Khởi tạo lần đầu (bootstrap tài khoản Admin)
