@@ -5,25 +5,26 @@ import json
 import pandas as pd
 import re
 import os
-import streamlit as st
-import streamlit_authenticator as stauth
 import yaml
 from yaml.loader import SafeLoader
-# Import các Module tự viết từ dự án gốc của bạn
+import streamlit_authenticator as stauth
+import subprocess
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
-import subprocess
+
+st.set_page_config(layout="wide", page_title="CCTS Map")
+# Nút bấm làm mới
+if st.button("🔄 Cập nhật dữ liệu mới"):
+    st.rerun() # Lệnh này bắt buộc Streamlit chạy lại từ đầu để lấy dữ liệu mới
 
 def install_playwright():
     if not os.path.exists("/home/appuser/.cache/ms-playwright"):
         print("Đang tải trình duyệt Playwright, vui lòng đợi trong vài giây...")
         subprocess.run(["playwright", "install", "chromium"])
         print("Tải xong!")
-
 # Gọi hàm này trước khi bắt đầu logic chính của app
 install_playwright()
 
-st.set_page_config(layout="wide", page_title="CCTS Map")
 # 1. Load config đăng nhập
 with open('config.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
@@ -319,28 +320,30 @@ def main():
             st.error('Tên đăng nhập hoặc mật khẩu không chính xác')
         elif st.session_state["authentication_status"] is None:
             st.warning('Vui lòng nhập thông tin để tiếp tục.')
-        return # Dừng lại nếu chưa đăng nhập
+        return
 
-    # --- ĐĂNG NHẬP THÀNH CÔNG ---
-    
-    # Tạo Header tùy chỉnh để tiết kiệm diện tích
+    # Nút bấm làm mới
+    if st.button("🔄 Cập nhật dữ liệu mới"):
+        st.rerun()
+
+    # Header
     col1, col2 = st.columns([6, 1])
     col1.subheader("📍 BẢN ĐỒ GIÁM SÁT SỰ CỐ TRẠM SẠC")
-    
-    # Hiển thị tên (Fixed format) và nút đăng xuất
     with col2:
-        # Sử dụng text đơn giản để không bị lỗi form (bỏ bolding nếu cần)
-        st.caption(f"👤 {st.session_state['name']}") 
+        st.caption(f"👤 {st.session_state.get('name', '')}") 
         if st.button("Đăng xuất"):
             authenticator.logout()
             st.rerun()
+
+    # CSS ẩn sidebar
     st.markdown("""
         <style>
             [data-testid="stSidebar"] {display: none;}
             .block-container {padding-top: 1rem; padding-bottom: 1rem;}
         </style>
     """, unsafe_allow_html=True)
-    # Gọi hàm render bản đồ (đã full màn hình nhờ layout="wide")
+    
+    # Render bản đồ
     render_map()
 if __name__ == "__main__":
     main()
