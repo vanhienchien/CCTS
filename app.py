@@ -12,7 +12,11 @@ from folium.plugins import MiniMap
 from api_client import CCTSClient
 from utils import extract_core_station_code, parse_duration_to_hours
 
-st.set_page_config(layout="wide", page_title="CCTS Map")
+st.set_page_config(
+    page_title="CCTS Live Map",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
 def install_playwright():
     if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -97,7 +101,7 @@ def load_static_data():
 # ==========================================
 # 🔄 3. MODULE FETCH API (CÓ CACHE)
 # ==========================================
-@st.cache_data(ttl=600) # Làm mới dữ liệu tự động sau mỗi 5 phút
+@st.cache_data(ttl=300) # Làm mới dữ liệu tự động sau mỗi 5 phút
 def fetch_live_tickets():
     """
     Khởi tạo CCTSClient, tự động đăng nhập qua Playwright và gọi trực tiếp endpoint JSON 
@@ -168,16 +172,23 @@ def fetch_live_tickets():
 # ==========================================
 # 🎨 4. MODULE RENDER BẢN ĐỒ
 # ==========================================
-def create_station_popup_html(station_code, tickets_df, tech_name):
+def create_station_popup_html(station_code, tickets_df, tech_name, lat, lng):
     """
     Popup hiển thị các Charge Point trong trạm.
     Mỗi Charge Point sẽ được tô màu theo thời gian tồn tại ticket.
+    Mã trạm sẽ là 1 link, click vào sẽ mở Google Maps tới đúng tọa độ trạm.
     """
+
+    gmap_url = f"https://www.google.com/maps?q={float(lat)},{float(lng)}"
 
     html_content = f"""
     <div style="font-family:Arial;font-size:12px;min-width:280px;padding:5px;">
-        <h4 style="margin:0;color:#1f77b4;">
-            Trạm: {station_code}
+        <h4 style="margin:0;">
+            Trạm:
+            <a href="{gmap_url}" target="_blank" rel="noopener noreferrer"
+               style="color:#1f77b4;text-decoration:none;">
+                {station_code} 🗺️
+            </a>
         </h4>
 
         <div style="margin-top:4px;margin-bottom:6px;">
@@ -190,9 +201,7 @@ def create_station_popup_html(station_code, tickets_df, tech_name):
         <hr style="margin:5px 0;">
     """
 
-    # Sắp xếp ticket lâu nhất lên đầu
-    tickets_df = tickets_df.copy()
-    tickets_df["Hours"] = tickets_df["Ticket Duration"].apply(parse_duration_to_hours)
+    # Hours đã được tính sẵn 1 lần ở render_map(), chỉ cần sắp xếp lại
     tickets_df = tickets_df.sort_values("Hours", ascending=False)
 
     for _, row in tickets_df.iterrows():
@@ -351,13 +360,26 @@ def render_map():
     if df_tickets.empty:
         st.info("Hiện không có ticket sự cố nào đang mở.")
         return
-    
+
+    # Tính Hours 1 lần duy nhất cho toàn bộ dataframe (tránh tính lại nhiều lần cho mỗi trạm)
+    df_tickets = df_tickets.copy()
+    df_tickets["Hours"] = df_tickets["Ticket Duration"].apply(parse_duration_to_hours)
+
     # 2. Xử lý logic Map
     m = folium.Map(location=[12.25, 108.5], zoom_start=6.3) 
     Fullscreen(
         position="topright",
         title="Toàn màn hình",
         title_cancel="Thoát"
+    ).add_to(m)
+    LocateControl(
+        auto_start=False,
+        flyTo=True,
+        keepCurrentZoomLevel=True
+    ).add_to(m)
+    MiniMap(
+        toggle_display=True,
+        position="bottomright"
     ).add_to(m)
     total_tickets = len(df_tickets)
     
@@ -383,13 +405,13 @@ def render_map():
             lat = coords_map[core_code]['lat']
             lng = coords_map[core_code]['lng']
             tech_name = tech_map.get(core_code, "Unassigned")
-            
-            # Dùng lại apply(parse_duration_to_hours) để chuyển chuỗi thành số giờ
-            max_duration = group['Ticket Duration'].apply(parse_duration_to_hours).max()
+
+            # Dùng lại cột Hours đã tính sẵn từ trước để chọn màu marker
+            max_duration = group["Hours"].max()
             color = "darkred" if max_duration > 48 else ("orange" if max_duration >= 24 else "green")
-            
-            # Tạo popup danh sách
-            popup_html = create_station_popup_html(station_code, group, tech_name)
+
+            # Tạo popup danh sách (kèm lat/lng để tạo link Google Maps)
+            popup_html = create_station_popup_html(station_code, group, tech_name, lat, lng)
             
             # ==========================
             # Marker hiển thị số lượng Charge Point lỗi
@@ -427,17 +449,10 @@ def render_map():
         m,
         width="100%",
         height=700,
-        returned_objects=[]
+        returned_objects=[],
+        key="ccts_live_map"
     )
-    LocateControl(
-        auto_start=False,
-        flyTo=True,
-        keepCurrentZoomLevel=True
-    ).add_to(m)
-    MiniMap(
-        toggle_display=True,
-        position="bottomright"
-    ).add_to(m)
+
     # 5. Hiển thị nút tải file trạm thiếu (nếu có)
     if missing_stations:
         st.divider()
@@ -459,12 +474,6 @@ def render_map():
         )
 
 def main():
-
-    st.set_page_config(
-        page_title="CCTS Live Map",
-        layout="wide",
-        initial_sidebar_state="collapsed"
-    )
 
     st.markdown("""
     <style>
