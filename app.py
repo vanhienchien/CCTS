@@ -270,7 +270,73 @@ def create_station_popup_html(station_code, tickets_df, tech_name):
     html_content += "</div>"
 
     return html_content
+def create_station_marker(cp_count, color):
+    """
+    Tạo marker hình giọt nước có hiển thị số Charge Point lỗi.
+    """
 
+    color_map = {
+        "green": "#28a745",
+        "orange": "#ff9800",
+        "darkred": "#d62728"
+    }
+
+    marker_color = color_map.get(color, "#007bff")
+
+    html = f"""
+    <div style="
+        position:relative;
+        width:40px;
+        height:54px;
+    ">
+
+        <!-- Pin -->
+        <div style="
+            position:absolute;
+            width:40px;
+            height:40px;
+
+            background:{marker_color};
+
+            border-radius:50% 50% 50% 0;
+
+            transform:rotate(-45deg);
+
+            border:3px solid white;
+
+            box-shadow:0 3px 8px rgba(0,0,0,.45);
+
+        "></div>
+
+        <!-- Number -->
+        <div style="
+            position:absolute;
+
+            width:40px;
+            height:40px;
+
+            display:flex;
+            align-items:center;
+            justify-content:center;
+
+            color:white;
+            font-size:16px;
+            font-weight:bold;
+
+            z-index:999;
+
+        ">
+            {cp_count}
+        </div>
+
+    </div>
+    """
+
+    return folium.DivIcon(
+        html=html,
+        icon_size=(40,54),
+        icon_anchor=(20,54)
+    )
 def render_map():
     
     # 1. Nạp dữ liệu
@@ -325,62 +391,10 @@ def render_map():
 
             cp_count = len(group)
 
-            color_map = {
-                "green": "#2ca02c",
-                "orange": "#ff9800",
-                "darkred": "#d62728"
-            }
-
-            marker_color = color_map.get(color, "#1f77b4")
-
-            icon_html = f"""
-            <div style="
-                position: relative;
-                width: 42px;
-                height: 54px;
-            ">
-
-                <!-- Phần đầu hình tròn -->
-                <div style="
-                    position:absolute;
-                    top:0;
-                    left:0;
-                    width:42px;
-                    height:42px;
-                    background:{marker_color};
-                    border-radius:50%;
-                    border:3px solid white;
-                    box-shadow:0 3px 8px rgba(0,0,0,.35);
-                    color:white;
-                    font-size:16px;
-                    font-weight:bold;
-                    text-align:center;
-                    line-height:42px;
-                    z-index:2;
-                ">
-                    {cp_count}
-                </div>
-
-                <!-- Mũi nhọn -->
-                <div style="
-                    position:absolute;
-                    left:14px;
-                    top:28px;
-                    width:14px;
-                    height:14px;
-                    background:{marker_color};
-                    transform:rotate(45deg);
-                    border-right:3px solid white;
-                    border-bottom:3px solid white;
-                    z-index:1;
-                ">
-                </div>
-
-            </div>
-            """
-
             folium.Marker(
-                location=[lat, lng],
+
+                location=[lat,lng],
+
                 popup=folium.Popup(
                     folium.IFrame(
                         html=popup_html,
@@ -389,14 +403,14 @@ def render_map():
                     ),
                     max_width=360
                 ),
-                icon=folium.DivIcon(
-                    html=icon_html,
-                    icon_size=(42, 54),
-                    icon_anchor=(21, 54)
+
+                icon=create_station_marker(
+                    cp_count,
+                    color
                 )
+
             ).add_to(m)
         else:
-            first_row = group.iloc[0]
             missing_stations.append({
                 "Station Code": station_code,
                 "Ticket ID": "Multiple",
