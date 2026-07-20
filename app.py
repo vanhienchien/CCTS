@@ -353,7 +353,96 @@ def create_station_marker(cp_count, color):
         icon_size=(40,54),
         icon_anchor=(20,54)
     )
-def render_map():
+def _haversine_meters(lat1, lng1, lat2, lng2):
+    """Khoảng cách thực tế (mét) giữa 2 toạ độ, dùng để phát hiện kỹ thuật
+    viên có đang ở gần 1 trạm sạc hay không."""
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371000.0  # bán kính Trái Đất (m)
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lng2 - lng1)
+    a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlambda / 2) ** 2
+    return 2 * R * atan2(sqrt(a), sqrt(1 - a))
+
+
+STATION_PROXIMITY_METERS = 150  # Ngưỡng coi như "đang ở tại trạm"
+
+ROLE_MAP_COLORS = {
+    "ky_thuat": "blue",
+    "dieu_phoi_khu_vuc": "green",
+    "dieu_hanh": "orange",
+    "giam_doc": "purple",
+    "admin": "black",
+}
+
+
+def _find_nearby_station(lat, lng, coords_map, threshold=STATION_PROXIMITY_METERS):
+    """Tìm trạm gần nhất với 1 toạ độ, trả về (mã trạm, khoảng cách mét)
+    nếu nằm trong ngưỡng threshold, ngược lại trả về (None, None)."""
+    nearest_code, nearest_dist = None, None
+    for code, c in coords_map.items():
+        d = _haversine_meters(lat, lng, c["lat"], c["lng"])
+        if nearest_dist is None or d < nearest_dist:
+            nearest_dist, nearest_code = d, code
+    if nearest_dist is not None and nearest_dist <= threshold:
+        return nearest_code, nearest_dist
+    return None, None
+
+
+def add_staff_markers_to_map(m, user, coords_map=None):
+    """Vẽ vị trí nhân sự (mà `user` được phép xem) lên bản đồ folium `m` đã
+    có sẵn (dùng chung cho cả bản đồ sự cố và bản đồ vị trí nhân sự riêng).
+    Nếu `coords_map` (toạ độ các trạm) được truyền vào, sẽ tự động gắn thêm
+    1 tag hình cờ lê 🔧 cạnh kỹ thuật viên nào đang ở gần 1 trạm sạc, để
+    quản lý dễ nhận biết ai đang sửa trạm nào.
+
+    Trả về danh sách nhân sự chưa có toạ độ (để hiển thị cảnh báo)."""
+    coords_map = coords_map or {}
+    locations = auth.get_visible_locations(user)
+
+    has_coords = [loc for loc in locations if loc["lat"] is not None and loc["lng"] is not None]
+    no_coords = [loc for loc in locations if loc not in has_coords]
+
+    for loc in has_coords:
+        gmap_url = f"https://www.google.com/maps?q={loc['lat']},{loc['lng']}"
+        nearby_code, nearby_dist = _find_nearby_station(loc["lat"], loc["lng"], coords_map)
+
+        working_note = ""
+        if nearby_code:
+            working_note = (
+                f"<div style='margin-top:4px;padding:4px 6px;background:#fff3cd;border-radius:4px;'>"
+                f"🔧 Đang tại trạm <b>{nearby_code}</b> (~{nearby_dist:.0f}m)</div>"
+            )
+
+        popup_html = f"""
+        <div style="font-family:Arial;font-size:12px;min-width:200px;">
+            <b>{loc['full_name']}</b><br>
+            {auth.ROLE_LABELS.get(loc['role'], loc['role'])}<br>
+            Khu vực: {loc['regions'] or '—'}<br>
+            <a href="{gmap_url}" target="_blank" rel="noopener noreferrer">Xem trên Google Maps 🗺️</a><br>
+            <span style="color:#888;">Cập nhật lúc: {loc['updated_at'] or 'Chưa có'}</span>
+            {working_note}
+        </div>
+        """
+        folium.Marker(
+            location=[loc["lat"], loc["lng"]],
+            popup=folium.Popup(popup_html, max_width=260),
+            tooltip=(f"{loc['full_name']} — đang tại trạm {nearby_code}" if nearby_code else loc["full_name"]),
+            icon=folium.Icon(color=ROLE_MAP_COLORS.get(loc["role"], "gray"), icon="user"),
+        ).add_to(m)
+
+        # Tag động hình cờ lê, đặt lệch nhẹ cạnh marker nhân sự để không đè khít lên nhau
+        if nearby_code:
+            folium.Marker(
+                location=[loc["lat"] + 0.00015, loc["lng"] + 0.00015],
+                tooltip=f"🔧 {loc['full_name']} đang sửa trạm {nearby_code}",
+                icon=folium.Icon(color="cadetblue", icon="wrench", prefix="fa"),
+            ).add_to(m)
+
+    return no_coords
+
+
+def render_map(user):
     
     # 1. Nạp dữ liệu (cập nhật cách gọi hàm)
     with st.spinner("Đang đồng bộ dữ liệu tĩnh..."):
@@ -361,17 +450,6 @@ def render_map():
         
     with st.spinner("Đang kết nối hệ thống CCTS lấy ticket..."):
         df_tickets = fetch_live_tickets()
-
-    if df_tickets.empty:
-        st.info("Hiện không có ticket sự cố nào đang mở.")
-        return
-
-    # Map thông tin model vào DataFrame
-    df_tickets["Model Name"] = df_tickets["Charge Box Model"].map(cp_model_map).fillna("N/A")
-
-    # Tính Hours 1 lần duy nhất cho toàn bộ dataframe (tránh tính lại nhiều lần cho mỗi trạm)
-    df_tickets = df_tickets.copy()
-    df_tickets["Hours"] = df_tickets["Ticket Duration"].apply(parse_duration_to_hours)
 
     # 2. Xử lý logic Map
     m = folium.Map(location=[12.25, 108.5], zoom_start=6.3) 
@@ -389,69 +467,88 @@ def render_map():
         toggle_display=True,
         position="bottomright"
     ).add_to(m)
+
     total_tickets = len(df_tickets)
-    
     col1, col2 = st.columns(2)
     col1.metric("Tổng số sự cố đang mở", total_tickets)
     col2.info("Dữ liệu được làm mới tự động mỗi 5 phút để tối ưu hiệu năng API.")
 
     missing_stations = [] # Danh sách trạm thiếu tọa độ
-    
-    # 3. Gắn Markers (Gom nhóm theo trạm)
-    grouped = df_tickets.groupby('Station Code')
-    
-    for station_code, group in grouped:
-        core_code = extract_core_station_code(station_code)
-        
-        # Kiểm tra KV quản lý
-        region = region_map.get(core_code, "Unknown")
-        if region == "KV không quản lý":
-            continue
-            
-        # Kiểm tra tọa độ
-        if core_code in coords_map:
-            lat = coords_map[core_code]['lat']
-            lng = coords_map[core_code]['lng']
-            tech_name = tech_map.get(core_code, "Unassigned")
 
-            # Dùng lại cột Hours đã tính sẵn từ trước để chọn màu marker
-            max_duration = group["Hours"].max()
-            color = "darkred" if max_duration > 48 else ("orange" if max_duration >= 24 else "green")
+    if df_tickets.empty:
+        st.info("Hiện không có ticket sự cố nào đang mở.")
+    else:
+        # Map thông tin model vào DataFrame
+        df_tickets = df_tickets.copy()
+        df_tickets["Model Name"] = df_tickets["Charge Box Model"].map(cp_model_map).fillna("N/A")
 
-            # Tạo popup danh sách (kèm lat/lng để tạo link Google Maps)
-            popup_html = create_station_popup_html(station_code, group, tech_name, lat, lng)
-            
-            # ==========================
-            # Marker hiển thị số lượng Charge Point lỗi
-            # ==========================
+        # Tính Hours 1 lần duy nhất cho toàn bộ dataframe (tránh tính lại nhiều lần cho mỗi trạm)
+        df_tickets["Hours"] = df_tickets["Ticket Duration"].apply(parse_duration_to_hours)
 
-            cp_count = len(group)
+        # 3. Gắn Markers (Gom nhóm theo trạm)
+        grouped = df_tickets.groupby('Station Code')
 
-            folium.Marker(
-                location=[lat, lng],
+        for station_code, group in grouped:
+            core_code = extract_core_station_code(station_code)
 
-                popup=folium.Popup(
-                    folium.IFrame(
-                        html=popup_html,
-                        width=300,
-                        height=320
+            # Kiểm tra KV quản lý
+            region = region_map.get(core_code, "Unknown")
+            if region == "KV không quản lý":
+                continue
+
+            # Kiểm tra tọa độ
+            if core_code in coords_map:
+                lat = coords_map[core_code]['lat']
+                lng = coords_map[core_code]['lng']
+                tech_name = tech_map.get(core_code, "Unassigned")
+
+                # Dùng lại cột Hours đã tính sẵn từ trước để chọn màu marker
+                max_duration = group["Hours"].max()
+                color = "darkred" if max_duration > 48 else ("orange" if max_duration >= 24 else "green")
+
+                # Tạo popup danh sách (kèm lat/lng để tạo link Google Maps)
+                popup_html = create_station_popup_html(station_code, group, tech_name, lat, lng)
+
+                # ==========================
+                # Marker hiển thị số lượng Charge Point lỗi
+                # ==========================
+
+                cp_count = len(group)
+
+                folium.Marker(
+                    location=[lat, lng],
+
+                    popup=folium.Popup(
+                        folium.IFrame(
+                            html=popup_html,
+                            width=300,
+                            height=320
+                        ),
+                        max_width=300
                     ),
-                    max_width=300
-                ),
 
-                icon=folium.Icon(
-                    color=color,
-                    icon="info-sign"
-                )
+                    icon=folium.Icon(
+                        color=color,
+                        icon="info-sign"
+                    )
 
-            ).add_to(m)
-        else:
-            missing_stations.append({
-                "Station Code": station_code,
-                "Ticket ID": "Multiple",
-                "Problem": "Trạm có nhiều ticket lỗi"
-            })
-            
+                ).add_to(m)
+            else:
+                missing_stations.append({
+                    "Station Code": station_code,
+                    "Ticket ID": "Multiple",
+                    "Problem": "Trạm có nhiều ticket lỗi"
+                })
+
+    # 3b. Gộp vị trí nhân sự lên CÙNG bản đồ (chỉ dành cho cấp quản lý trở lên)
+    no_coords = []
+    if user["role"] != "ky_thuat":
+        show_overlay = st.checkbox(
+            "🧑‍🔧 Hiện vị trí kỹ thuật viên trên bản đồ", value=True, key="overlay_staff_on_main_map"
+        )
+        if show_overlay:
+            no_coords = add_staff_markers_to_map(m, user, coords_map)
+
     # 4. Render Bản đồ lên Streamlit
     st_folium(
         m,
@@ -460,6 +557,12 @@ def render_map():
         returned_objects=[],
         key="ccts_live_map"
     )
+
+    if no_coords:
+        st.caption(
+            f"⚠️ {len(no_coords)} người chưa chia sẻ vị trí: "
+            + ", ".join(x["full_name"] for x in no_coords)
+        )
 
     # 5. Hiển thị nút tải file trạm thiếu (nếu có)
     if missing_stations:
@@ -566,48 +669,20 @@ def render_user_bar(user):
 
 
 def render_staff_map(user):
-    """Bản đồ vị trí nhân sự - mỗi cấp bậc xem được các cấp thấp hơn mình."""
+    """Bản đồ vị trí nhân sự riêng (không kèm marker trạm) - mỗi cấp bậc xem
+    được các cấp thấp hơn mình. Dùng chung logic vẽ marker với render_map()."""
     st.subheader("📍 Vị trí nhân sự")
 
     if st.button("🔄 Làm mới vị trí", key="refresh_staff_map"):
         st.rerun()
 
-    locations = auth.get_visible_locations(user)
-    if not locations:
-        st.info("Chưa có dữ liệu vị trí nào được ghi nhận.")
-        return
-
-    has_coords = [loc for loc in locations if loc["lat"] is not None and loc["lng"] is not None]
-    no_coords = [loc for loc in locations if loc not in has_coords]
+    with st.spinner("Đang tải toạ độ trạm để đối chiếu..."):
+        coords_map, _, _, _ = load_static_data()
 
     m = folium.Map(location=[12.25, 108.5], zoom_start=6.3)
     Fullscreen(position="topright", title="Toàn màn hình", title_cancel="Thoát").add_to(m)
 
-    role_colors = {
-        "ky_thuat": "blue",
-        "dieu_phoi_khu_vuc": "green",
-        "dieu_hanh": "orange",
-        "giam_doc": "purple",
-        "admin": "black",
-    }
-
-    for loc in has_coords:
-        gmap_url = f"https://www.google.com/maps?q={loc['lat']},{loc['lng']}"
-        popup_html = f"""
-        <div style="font-family:Arial;font-size:12px;min-width:200px;">
-            <b>{loc['full_name']}</b><br>
-            {auth.ROLE_LABELS.get(loc['role'], loc['role'])}<br>
-            Khu vực: {loc['regions'] or '—'}<br>
-            <a href="{gmap_url}" target="_blank" rel="noopener noreferrer">Xem trên Google Maps 🗺️</a><br>
-            <span style="color:#888;">Cập nhật lúc: {loc['updated_at'] or 'Chưa có'}</span>
-        </div>
-        """
-        folium.Marker(
-            location=[loc["lat"], loc["lng"]],
-            popup=folium.Popup(popup_html, max_width=260),
-            tooltip=loc["full_name"],
-            icon=folium.Icon(color=role_colors.get(loc["role"], "gray"), icon="user"),
-        ).add_to(m)
+    no_coords = add_staff_markers_to_map(m, user, coords_map)
 
     st_folium(m, width="100%", height=600, returned_objects=[], key="staff_location_map")
 
@@ -784,7 +859,7 @@ def main():
                 st.rerun()
         with col2:
             st.caption("Tự động cập nhật mỗi 10 phút")
-        render_map()
+        render_map(user)
 
     tab_idx = 1
     if user["role"] != "ky_thuat":
