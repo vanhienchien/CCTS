@@ -14,10 +14,94 @@ from utils import extract_core_station_code, parse_duration_to_hours
 import auth_gsheets as auth
 import traceback
 
+# ==========================================
+# 📍 Component v2: theo dõi vị trí liên tục (không cần bấm nút)
+# ==========================================
+# Yêu cầu streamlit >= 1.51 (custom components v2). Dùng navigator.geolocation
+# .watchPosition() để tự động xin quyền định vị NGAY khi trang được tải (trình
+# duyệt vẫn sẽ hiện popup xin quyền - không thể bỏ qua bước này vì lý do bảo
+# mật trình duyệt), sau đó tự động gửi vị trí mới về Python mỗi khi thiết bị
+# di chuyển đủ xa hoặc sau một khoảng thời gian nhất định, mô phỏng việc theo
+# dõi vị trí liên tục kiểu Google Maps.
+_GEO_WATCHER_JS = """
+export default function(component) {
+    const { data, setStateValue, parentElement } = component;
+    if (window.__geoWatchStarted) return;  // Tránh khởi tạo lại nhiều lần khi component re-render
+    window.__geoWatchStarted = true;
+
+    const minIntervalMs = (data && data.min_interval_sec ? data.min_interval_sec : 15) * 1000;
+    const minDistanceM = (data && data.min_distance_m) ? data.min_distance_m : 20;
+
+    let lastSent = null; // {lat, lng, time}
+
+    function haversine(lat1, lng1, lat2, lng2) {
+        const R = 6371000;
+        const toRad = (d) => d * Math.PI / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLng = toRad(lng2 - lng1);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    if (!navigator.geolocation) {
+        setStateValue("error", "Trình duyệt không hỗ trợ định vị");
+        return;
+    }
+
+    navigator.geolocation.watchPosition(
+        (pos) => {
+            const now = Date.now();
+            const { latitude, longitude, accuracy } = pos.coords;
+            let shouldSend = !lastSent;
+            if (lastSent) {
+                const dt = now - lastSent.time;
+                const dist = haversine(lastSent.lat, lastSent.lng, latitude, longitude);
+                shouldSend = dt >= minIntervalMs || dist >= minDistanceM;
+            }
+            if (shouldSend) {
+                lastSent = { lat: latitude, lng: longitude, time: now };
+                setStateValue("latitude", latitude);
+                setStateValue("longitude", longitude);
+                setStateValue("accuracy", accuracy);
+                setStateValue("updated_ts", now);
+                setStateValue("error", null);
+            }
+        },
+        (err) => {
+            setStateValue("error", err.message || "Không lấy được vị trí (có thể do bị chặn quyền định vị)");
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+    );
+}
+"""
+
 try:
-    from streamlit_geolocation import streamlit_geolocation
-except ImportError:
-    streamlit_geolocation = None
+    _geo_watcher_component = st.components.v2.component(
+        "geo_watcher",
+        html="<div></div>",
+        css="div { display:none; }",
+        js=_GEO_WATCHER_JS,
+    )
+except AttributeError:
+    # Streamlit < 1.51 chưa có components.v2 -> vô hiệu hoá tính năng theo dõi vị trí tự động
+    _geo_watcher_component = None
+
+
+def geo_watcher(min_interval_sec=15, min_distance_m=20, key="geo_watcher"):
+    """Trả về object có .latitude/.longitude/.accuracy/.updated_ts/.error -
+    None nếu chưa có dữ liệu hoặc trình duyệt/Streamlit không hỗ trợ."""
+    if _geo_watcher_component is None:
+        return None
+    return _geo_watcher_component(
+        data={"min_interval_sec": min_interval_sec, "min_distance_m": min_distance_m},
+        default={"latitude": None, "longitude": None, "accuracy": None, "updated_ts": None, "error": None},
+        on_latitude_change=lambda: None,
+        on_longitude_change=lambda: None,
+        on_accuracy_change=lambda: None,
+        on_updated_ts_change=lambda: None,
+        on_error_change=lambda: None,
+        key=key,
+    )
 
 st.set_page_config(
     page_title="CCTS Live Map",
@@ -368,12 +452,54 @@ def _haversine_meters(lat1, lng1, lat2, lng2):
 STATION_PROXIMITY_METERS = 150  # Ngưỡng coi như "đang ở tại trạm"
 
 ROLE_MAP_COLORS = {
-    "ky_thuat": "blue",
-    "dieu_phoi_khu_vuc": "green",
-    "dieu_hanh": "orange",
-    "giam_doc": "purple",
-    "admin": "black",
+    "ky_thuat": "#1f77b4",
+    "dieu_phoi_khu_vuc": "#2ca02c",
+    "dieu_hanh": "#e67e22",
+    "giam_doc": "#8e44ad",
+    "admin": "#2c3e50",
 }
+
+
+def _initials(full_name):
+    """Lấy chữ viết tắt tên từ họ tên đầy đủ, ví dụ 'Nguyễn Đức Huy' -> 'NH'
+    (chữ cái đầu của từ đầu tiên + chữ cái đầu của từ cuối cùng)."""
+    parts = [p for p in str(full_name).strip().split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
+def _staff_avatar_icon(initials, color):
+    """Marker hình tròn nhỏ hiển thị chữ viết tắt tên, dễ quan sát trên bản đồ
+    khi có nhiều nhân sự cùng lúc."""
+    html = f"""
+    <div style="
+        width:30px;height:30px;border-radius:50%;
+        background:{color};color:#ffffff;
+        display:flex;align-items:center;justify-content:center;
+        font-size:12px;font-weight:700;font-family:Arial,sans-serif;
+        border:2px solid #ffffff;
+        box-shadow:0 2px 6px rgba(0,0,0,.45);
+    ">{initials}</div>
+    """
+    return folium.DivIcon(html=html, icon_size=(30, 30), icon_anchor=(15, 15))
+
+
+def _wrench_badge_icon():
+    """Tag động hình cờ lê, gắn cạnh nhân sự đang ở gần 1 trạm sạc."""
+    html = """
+    <div style="
+        width:24px;height:24px;border-radius:50%;
+        background:#ffffff;color:#e67e22;
+        display:flex;align-items:center;justify-content:center;
+        font-size:13px;
+        border:2px solid #e67e22;
+        box-shadow:0 2px 5px rgba(0,0,0,.4);
+    ">🔧</div>
+    """
+    return folium.DivIcon(html=html, icon_size=(24, 24), icon_anchor=(12, 12))
 
 
 def _find_nearby_station(lat, lng, coords_map, threshold=STATION_PROXIMITY_METERS):
@@ -391,7 +517,7 @@ def _find_nearby_station(lat, lng, coords_map, threshold=STATION_PROXIMITY_METER
 
 def add_staff_markers_to_map(m, user, coords_map=None):
     """Vẽ vị trí nhân sự (mà `user` được phép xem) lên bản đồ folium `m` đã
-    có sẵn (dùng chung cho cả bản đồ sự cố và bản đồ vị trí nhân sự riêng).
+    có sẵn, mỗi người hiển thị bằng 1 hình tròn nhỏ ghi chữ viết tắt tên.
     Nếu `coords_map` (toạ độ các trạm) được truyền vào, sẽ tự động gắn thêm
     1 tag hình cờ lê 🔧 cạnh kỹ thuật viên nào đang ở gần 1 trạm sạc, để
     quản lý dễ nhận biết ai đang sửa trạm nào.
@@ -428,7 +554,7 @@ def add_staff_markers_to_map(m, user, coords_map=None):
             location=[loc["lat"], loc["lng"]],
             popup=folium.Popup(popup_html, max_width=260),
             tooltip=(f"{loc['full_name']} — đang tại trạm {nearby_code}" if nearby_code else loc["full_name"]),
-            icon=folium.Icon(color=ROLE_MAP_COLORS.get(loc["role"], "gray"), icon="user"),
+            icon=_staff_avatar_icon(_initials(loc["full_name"]), ROLE_MAP_COLORS.get(loc["role"], "#7f8c8d")),
         ).add_to(m)
 
         # Tag động hình cờ lê, đặt lệch nhẹ cạnh marker nhân sự để không đè khít lên nhau
@@ -436,7 +562,7 @@ def add_staff_markers_to_map(m, user, coords_map=None):
             folium.Marker(
                 location=[loc["lat"] + 0.00015, loc["lng"] + 0.00015],
                 tooltip=f"🔧 {loc['full_name']} đang sửa trạm {nearby_code}",
-                icon=folium.Icon(color="cadetblue", icon="wrench", prefix="fa"),
+                icon=_wrench_badge_icon(),
             ).add_to(m)
 
     return no_coords
@@ -634,10 +760,12 @@ def login_page():
 
 
 def render_user_bar(user):
-    """Thanh trạng thái người dùng: thông tin cá nhân, tự động gửi vị trí, đăng xuất.
-    Vị trí được yêu cầu tự động ngay khi vào trang (trình duyệt sẽ tự hiện popup
-    xin quyền định vị - đây là bước bắt buộc theo chính sách bảo mật trình duyệt,
-    không thể bỏ qua)."""
+    """Thanh trạng thái người dùng: thông tin cá nhân, tự động gửi vị trí LIÊN TỤC
+    (không cần bấm nút), đăng xuất. Trình duyệt sẽ tự hiện popup xin quyền định vị
+    ngay khi trang tải - đây là bước bắt buộc theo chính sách bảo mật trình duyệt,
+    không thể bỏ qua. Sau khi được cấp quyền, vị trí sẽ tự động cập nhật mỗi khi
+    thiết bị di chuyển đủ xa hoặc sau một khoảng thời gian nhất định, kể cả khi
+    không có tương tác gì thêm từ người dùng."""
     top_l, top_m, top_r = st.columns([3, 2, 1])
 
     with top_l:
@@ -649,45 +777,25 @@ def render_user_bar(user):
         )
 
     with top_m:
-        if streamlit_geolocation is None:
-            st.caption("⚠️ Thiếu thư viện streamlit-geolocation (xem requirements.txt)")
+        loc = geo_watcher(min_interval_sec=15, min_distance_m=20, key="geo_watcher_main")
+        if loc is None:
+            st.caption("⚠️ Cần Streamlit >= 1.51 để bật theo dõi vị trí tự động.")
+        elif loc.error:
+            st.caption(f"⚠️ Không lấy được vị trí: {loc.error}")
+        elif loc.latitude is not None:
+            current = (round(loc.latitude, 5), round(loc.longitude, 5))
+            if current != st.session_state.get("last_sent_loc"):
+                auth.update_location(user["username"], loc.latitude, loc.longitude, loc.accuracy)
+                st.session_state["last_sent_loc"] = current
+                st.toast("📍 Đã cập nhật vị trí của bạn")
+            st.caption("📍 Đang theo dõi vị trí")
         else:
-            loc = streamlit_geolocation()
-            if loc and loc.get("latitude") is not None:
-                current = (round(loc["latitude"], 5), round(loc["longitude"], 5))
-                if current != st.session_state.get("last_sent_loc"):
-                    auth.update_location(
-                        user["username"], loc["latitude"], loc["longitude"], loc.get("accuracy")
-                    )
-                    st.session_state["last_sent_loc"] = current
-                    st.toast("📍 Đã cập nhật vị trí của bạn lên hệ thống")
+            st.caption("📍 Đang chờ trình duyệt cấp quyền định vị...")
 
     with top_r:
         if st.button("🚪 Đăng xuất", use_container_width=True):
             st.session_state.clear()
             st.rerun()
-
-
-def render_staff_map(user):
-    """Bản đồ vị trí nhân sự riêng (không kèm marker trạm) - mỗi cấp bậc xem
-    được các cấp thấp hơn mình. Dùng chung logic vẽ marker với render_map()."""
-    st.subheader("📍 Vị trí nhân sự")
-
-    if st.button("🔄 Làm mới vị trí", key="refresh_staff_map"):
-        st.rerun()
-
-    with st.spinner("Đang tải toạ độ trạm để đối chiếu..."):
-        coords_map, _, _, _ = load_static_data()
-
-    m = folium.Map(location=[12.25, 108.5], zoom_start=6.3)
-    Fullscreen(position="topright", title="Toàn màn hình", title_cancel="Thoát").add_to(m)
-
-    no_coords = add_staff_markers_to_map(m, user, coords_map)
-
-    st_folium(m, width="100%", height=600, returned_objects=[], key="staff_location_map")
-
-    if no_coords:
-        st.caption(f"⚠️ {len(no_coords)} người chưa chia sẻ vị trí: " + ", ".join(x["full_name"] for x in no_coords))
 
 
 def render_admin_panel():
@@ -844,8 +952,6 @@ def main():
     st.title("⚡ CCTS Live Map")
 
     tab_labels = ["🗺️ Bản đồ sự cố"]
-    if user["role"] != "ky_thuat":
-        tab_labels.append("📍 Vị trí nhân sự")
     if user["role"] == "admin":
         tab_labels.append("👤 Quản lý tài khoản")
 
@@ -861,13 +967,8 @@ def main():
             st.caption("Tự động cập nhật mỗi 10 phút")
         render_map(user)
 
-    tab_idx = 1
-    if user["role"] != "ky_thuat":
-        with tabs[tab_idx]:
-            render_staff_map(user)
-        tab_idx += 1
     if user["role"] == "admin":
-        with tabs[tab_idx]:
+        with tabs[1]:
             render_admin_panel()
 
 if __name__ == "__main__":
